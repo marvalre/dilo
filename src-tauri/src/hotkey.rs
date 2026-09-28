@@ -164,6 +164,27 @@ pub fn has_accessibility() -> bool {
     }
 }
 
+/// Shows macOS's own "Dicta would like to control this computer" prompt, which also
+/// adds Dicta (with its current signature) to the Accessibility list.
+pub fn prompt_accessibility() {
+    #[cfg(target_os = "macos")]
+    {
+        use core_foundation::base::TCFType;
+        use core_foundation::boolean::CFBoolean;
+        use core_foundation::dictionary::CFDictionary;
+        use core_foundation::string::CFString;
+        #[link(name = "ApplicationServices", kind = "framework")]
+        extern "C" {
+            fn AXIsProcessTrustedWithOptions(options: core_foundation::dictionary::CFDictionaryRef) -> bool;
+        }
+        let key = CFString::from_static_string("AXTrustedCheckOptionPrompt");
+        let opts = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), CFBoolean::true_value().as_CFType())]);
+        unsafe {
+            AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef());
+        }
+    }
+}
+
 pub fn open_accessibility_settings() {
     #[cfg(target_os = "macos")]
     {

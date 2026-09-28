@@ -217,6 +217,7 @@ pub fn permissions() -> Permissions {
 
 #[tauri::command]
 pub fn open_accessibility_settings() {
+    hotkey::prompt_accessibility();
     hotkey::open_accessibility_settings();
 }
 

@@ -36,6 +36,7 @@ tauri-plugin-autostart = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication"] }
 objc2-foundation = { version = "0.3", features = ["NSString"] }
+core-foundation = "0.10"
 objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat"] }
 
 [dev-dependencies]

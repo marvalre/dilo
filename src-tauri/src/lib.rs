@@ -104,6 +104,9 @@ pub fn run() {
             tray::create(app.handle())?;
             coordinator::spawn_idle_unloader(core.clone());
 
+            if !hotkey::has_accessibility() {
+                hotkey::prompt_accessibility();
+            }
             let handle = app.handle().clone();
             let hotkey = core.settings.read().unwrap().hotkey.clone();
             match hotkey::spawn(&hotkey, move |pressed| coordinator::on_hotkey(&handle, pressed)) {
