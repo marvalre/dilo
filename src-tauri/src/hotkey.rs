@@ -97,3 +97,16 @@ pub fn open_accessibility_settings() {
         let _ = handy_keys::open_accessibility_settings();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::validate;
+
+    #[test]
+    fn default_and_preset_hotkeys_parse() {
+        for k in ["Fn", "CtrlRight", "OptRight", "CmdRight", "Ctrl+Space"] {
+            assert!(validate(k).is_ok(), "{k}: {:?}", validate(k));
+        }
+        assert!(validate("NotAKey+++").is_err());
+    }
+}
