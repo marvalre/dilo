@@ -1,0 +1,233 @@
+import { useEffect, useState, type ReactNode } from "react";
+import { api, type Permissions, type Settings } from "./api";
+import { useModelStatus, useSettings } from "./hooks";
+import { errMsg, fmtNum, langName } from "./format";
+import { hotkeyCaps } from "./hotkey";
+import { CheckIcon } from "./icons";
+import { Keycaps, PageHeader, Select, Switch } from "./ui";
+
+const LANGS = ["es", "en", "fr", "de", "pt", "it", "nl", "pl", "uk", "ru", "bg", "hr", "cs", "da", "et", "fi", "el", "hu", "lv", "lt", "mt", "ro", "sk", "sl", "sv"];
+const DEFAULT_MIC = "__default__";
+
+function Row({ label, sub, children }: { label: ReactNode; sub?: ReactNode; children?: ReactNode }) {
+  return (
+    <div className="grow">
+      <div className="grow-label">
+        <span>{label}</span>
+        {sub && <span className="grow-sub">{sub}</span>}
+      </div>
+      {children != null && <div className="grow-control">{children}</div>}
+    </div>
+  );
+}
+
+function Group({ title, children, footer }: { title?: string; children: ReactNode; footer?: ReactNode }) {
+  return (
+    <section className="group-wrap">
+      {title && <h2 className="section-label">{title}</h2>}
+      <div className="group">{children}</div>
+      {footer && <p className="group-footer">{footer}</p>}
+    </section>
+  );
+}
+
+export default function SettingsPage() {
+  const { settings, save } = useSettings();
+  const [error, setError] = useState<string | null>(null);
+  const [mics, setMics] = useState<string[]>([]);
+
+  useEffect(() => {
+    api.microphones().then(setMics).catch(() => {});
+  }, []);
+
+  if (!settings) return <PageHeader title="Ajustes" />;
+
+  const update = (patch: Partial<Settings>) => {
+    setError(null);
+    return save({ ...settings, ...patch }).catch((e) => {
+      setError(errMsg(e));
+      throw e;
+    });
+  };
+  const set = (patch: Partial<Settings>) => void update(patch).catch(() => {});
+
+  const micList = settings.mic && !mics.includes(settings.mic) ? [settings.mic, ...mics] : mics;
+
+  return (
+    <>
+      <PageHeader title="Ajustes" />
+      {error && <p className="error-text banner-error">{error}</p>}
+
+      <Group
+        title="Dictado"
+        footer={
+          <>
+            Consejo: si usas fn, en Ajustes del Sistema → Teclado pon «Al pulsar 🌐» en «No hacer nada».
+          </>
+        }
+      >
+        <HotkeyRow hotkey={settings.hotkey} onSave={(hotkey) => update({ hotkey })} />
+        <Row label="Idioma" sub="En automático Dicta detecta el idioma en cada dictado.">
+          <Select label="Idioma" value={settings.language} onChange={(v) => set({ language: v })}>
+            <option value="auto">Automático (recomendado)</option>
+            <option disabled>──────────</option>
+            {LANGS.map((c) => (
+              <option key={c} value={c}>
+                {langName(c)}
+              </option>
+            ))}
+          </Select>
+        </Row>
+        <Row label="Micrófono">
+          <Select label="Micrófono" value={settings.mic ?? DEFAULT_MIC} onChange={(v) => set({ mic: v === DEFAULT_MIC ? null : v })}>
+            <option value={DEFAULT_MIC}>Predeterminado del sistema</option>
+            {micList.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </Select>
+        </Row>
+      </Group>
+
+      <Group title="Modelo">
+        <ModelRow />
+        <Row label="Liberar el modelo tras" sub="Libera memoria cuando no dictas. Volver a cargarlo tarda un segundo.">
+          <Select label="Liberar el modelo tras" value={String(settings.idle_unload_min)} onChange={(v) => set({ idle_unload_min: Number(v) })}>
+            {[2, 5, 10, 30].map((n) => (
+              <option key={n} value={n}>
+                {n} min
+              </option>
+            ))}
+            <option value="0">Nunca</option>
+          </Select>
+        </Row>
+      </Group>
+
+      <Group title="General">
+        <Row label="Abrir al iniciar sesión">
+          <Switch label="Abrir al iniciar sesión" checked={settings.launch_at_login} onChange={(v) => set({ launch_at_login: v })} />
+        </Row>
+        <Row label="Aviso de almacenamiento" sub="Te avisamos en Inicio si Dicta ocupa más de esto.">
+          <Select label="Aviso de almacenamiento" value={String(settings.storage_warn_mb)} onChange={(v) => set({ storage_warn_mb: Number(v) })}>
+            {![500, 1000, 2000, 5000].includes(settings.storage_warn_mb) && (
+              <option value={settings.storage_warn_mb}>{fmtNum(settings.storage_warn_mb)} MB</option>
+            )}
+            <option value="500">500 MB</option>
+            <option value="1000">1 GB</option>
+            <option value="2000">2 GB</option>
+            <option value="5000">5 GB</option>
+          </Select>
+        </Row>
+      </Group>
+
+      <PermissionsGroup />
+
+      <footer className="about">Dicta 0.2 · open source (MIT)</footer>
+    </>
+  );
+}
+
+function HotkeyRow({ hotkey, onSave }: { hotkey: string; onSave: (h: string) => Promise<void> }) {
+  const [capturing, setCapturing] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const capture = async () => {
+    setErr(null);
+    setCapturing(true);
+    try {
+      const k = await api.captureHotkey();
+      if (k) await onSave(k);
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setCapturing(false);
+    }
+  };
+
+  return (
+    <div className="grow">
+      <div className="grow-label">
+        <span>Tecla para dictar</span>
+        <span className="grow-sub">
+          {capturing ? "Presiona la tecla o combinación… (Esc para cancelar)" : "Mantenla presionada mientras hablas y suéltala para pegar."}
+        </span>
+        {err && <span className="grow-sub error-text">{err}</span>}
+      </div>
+      <div className="grow-control">
+        {capturing ? <Keycaps caps={["…"]} pulsing /> : <Keycaps caps={hotkeyCaps(hotkey)} />}
+        <button className="btn" onClick={capture} disabled={capturing}>
+          Cambiar
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ModelRow() {
+  const m = useModelStatus();
+  const [err, setErr] = useState<string | null>(null);
+  const download = () => {
+    setErr(null);
+    api.downloadModel().catch((e) => setErr(errMsg(e)));
+  };
+  const error = err ?? m?.error ?? null;
+  if (!m) return <Row label="Modelo de voz" sub="Comprobando…" />;
+  if (m.ready) {
+    return (
+      <Row label="Modelo de voz" sub="Parakeet v3 · listo">
+        <span className={m.loaded ? "badge badge-ok" : "badge"}>{m.loaded ? "En memoria" : "Liberado"}</span>
+      </Row>
+    );
+  }
+  if (m.downloading) {
+    const pct = m.total > 0 ? Math.min(100, (m.done / m.total) * 100) : 0;
+    return (
+      <Row
+        label="Modelo de voz"
+        sub={`Descargando… ${fmtNum(m.done / 1_000_000)} de ${m.total > 0 ? fmtNum(m.total / 1_000_000) : "…"} MB`}
+      >
+        <div className="progress progress-inline">
+          <div className="progress-fill" style={{ width: `${pct}%` }} />
+        </div>
+      </Row>
+    );
+  }
+  return (
+    <Row label="Modelo de voz" sub={error ? <span className="error-text">{error}</span> : "Parakeet v3 · no descargado (unos 670 MB)"}>
+      <button className="btn btn-primary" onClick={download}>
+        Descargar
+      </button>
+    </Row>
+  );
+}
+
+function PermissionsGroup() {
+  const [p, setP] = useState<Permissions | null>(null);
+  useEffect(() => {
+    const poll = () => api.permissions().then(setP).catch(() => {});
+    poll();
+    const id = window.setInterval(poll, 2000);
+    return () => window.clearInterval(id);
+  }, []);
+  const item = (ok: boolean | undefined, open: () => Promise<void>) =>
+    ok ? (
+      <span className="perm-ok">
+        <CheckIcon size={13} /> Concedido
+      </span>
+    ) : (
+      <button className="btn" onClick={() => open().catch(() => {})} disabled={!p}>
+        Abrir ajustes
+      </button>
+    );
+  return (
+    <Group title="Permisos">
+      <Row label="Accesibilidad" sub="Para pegar el texto donde está el cursor.">
+        {item(p?.accessibility, api.openAccessibilitySettings)}
+      </Row>
+      <Row label="Micrófono" sub="Para escucharte mientras mantienes la tecla.">
+        {item(p?.microphone, api.openMicrophoneSettings)}
+      </Row>
+    </Group>
+  );
+}

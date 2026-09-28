@@ -1,93 +1,122 @@
-import { useEffect, useRef, useState } from "react";
-import { api, events, type ModelStatus } from "./api";
-import { useTauriEvent } from "./hooks";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { events } from "./api";
+import { SettingsContext, usePageVisible, useReducedMotion, useSettings, useSettingsState, useTauriEvent } from "./hooks";
+import { hotkeyLabel } from "./hotkey";
+import { BookIcon, ClockIcon, FaceIcon, GearIcon, HomeIcon } from "./icons";
+import { MascotFace } from "../shared/MascotFace";
+import { useMascotAnim } from "../shared/useMascotAnim";
+import Home from "./Home";
 import History from "./History";
-import Stats from "./Stats";
-import Settings from "./Settings";
+import Dictionary from "./Dictionary";
+import MascotPage from "./MascotPage";
+import SettingsPage from "./SettingsPage";
 
-type Tab = "history" | "stats" | "settings";
+export type Section = "home" | "history" | "dictionary" | "mascot" | "settings";
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "history", label: "Historial" },
-  { id: "stats", label: "Estadísticas" },
-  { id: "settings", label: "Ajustes" },
+const NAV: { id: Section; label: string; icon: ReactNode }[] = [
+  { id: "home", label: "Inicio", icon: <HomeIcon /> },
+  { id: "history", label: "Historial", icon: <ClockIcon /> },
+  { id: "dictionary", label: "Diccionario", icon: <BookIcon /> },
+  { id: "mascot", label: "Monito", icon: <FaceIcon /> },
+  { id: "settings", label: "Ajustes", icon: <GearIcon /> },
 ];
 
-const isTab = (t: string): t is Tab => TABS.some((x) => x.id === t);
-
-function Logo() {
-  return (
-    <svg className="logo" width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
-      <circle cx="11" cy="11" r="10.5" fill="#F5EEE6" stroke="rgba(0,0,0,0.08)" />
-      <circle cx="7.6" cy="9.4" r="1.5" fill="#1C1C22" />
-      <circle cx="14.4" cy="9.4" r="1.5" fill="#1C1C22" />
-      <path
-        d="M7.4 14.2 q0.9 -0.8 1.8 0 t1.8 0 t1.8 0 t1.8 0"
-        fill="none"
-        stroke="#1C1C22"
-        strokeWidth="1.2"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
+function toSection(raw: string): Section | null {
+  const t = raw.replace(/^#/, "");
+  if (t === "stats") return "home";
+  return NAV.some((n) => n.id === t) ? (t as Section) : null;
 }
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>(() => {
-    const fromUrl = window.location.hash.slice(1);
-    return isTab(fromUrl) ? fromUrl : "history";
-  });
-  const [model, setModel] = useState<ModelStatus | null>(null);
+  const settingsState = useSettingsState();
+  const [section, setSection] = useState<Section>(() => toSection(window.location.hash) ?? "home");
   const contentRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     contentRef.current?.scrollTo(0, 0);
-  }, [tab]);
-
-  useEffect(() => {
-    api.modelStatus().then(setModel).catch(() => {});
-  }, []);
-  useTauriEvent(events.onShowTab, (t) => isTab(t) && setTab(t));
-  useTauriEvent(events.onModelStatus, setModel);
+    if (window.location.hash !== `#${section}`) history.replaceState(null, "", `#${section}`);
+  }, [section]);
+  useTauriEvent(events.onShowTab, (t) => {
+    const s = toSection(t);
+    if (s) setSection(s);
+  });
 
   return (
-    <div className="app">
-      <header className="header">
-        <div className="brand">
-          <Logo />
-          <span>Dicta</span>
-        </div>
-        <nav className="tabs" role="tablist">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              role="tab"
-              aria-selected={tab === t.id}
-              className={tab === t.id ? "tab active" : "tab"}
-              onClick={() => setTab(t.id)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </nav>
-      </header>
-      {model && !model.ready && tab !== "settings" && (
-        <div className="banner">
-          <span>
-            {model.downloading
-              ? "Descargando el modelo de voz…"
-              : "Descarga el modelo de voz para empezar (~670 MB)"}
-          </span>
-          <button className="btn btn-accent btn-sm" onClick={() => setTab("settings")}>
-            {model.downloading ? "Ver progreso" : "Ir a Ajustes"}
-          </button>
-        </div>
-      )}
-      <main className="content" role="tabpanel" ref={contentRef}>
-        {tab === "history" && <History />}
-        {tab === "stats" && <Stats />}
-        {tab === "settings" && <Settings />}
-      </main>
+    <SettingsContext.Provider value={settingsState}>
+      <div className="app">
+        <aside className="sidebar">
+          <SidebarBrand />
+          <nav className="nav" aria-label="Secciones">
+            {NAV.map((n) => (
+              <button
+                key={n.id}
+                className={section === n.id ? "nav-item active" : "nav-item"}
+                aria-current={section === n.id ? "page" : undefined}
+                onClick={() => setSection(n.id)}
+              >
+                <span className="nav-icon">{n.icon}</span>
+                {n.label}
+              </button>
+            ))}
+          </nav>
+          <HotkeyHint />
+        </aside>
+        <main className="content" ref={contentRef}>
+          <div className="content-inner" key={section}>
+            {section === "home" && <Home onNavigate={setSection} />}
+            {section === "history" && <History />}
+            {section === "dictionary" && <Dictionary />}
+            {section === "mascot" && <MascotPage />}
+            {section === "settings" && <SettingsPage />}
+          </div>
+        </main>
+      </div>
+    </SettingsContext.Provider>
+  );
+}
+
+function SidebarBrand() {
+  const { settings } = useSettings();
+  const reduced = useReducedMotion();
+  const visible = usePageVisible();
+  const target = useRef(0.2);
+  useEffect(() => {
+    if (reduced) return;
+    const start = performance.now();
+    const id = window.setInterval(() => {
+      const t = (performance.now() - start) / 1000;
+      target.current = 0.22 + 0.16 * Math.sin(t * 1.3) + 0.06 * Math.sin(t * 3.1);
+    }, 60);
+    return () => window.clearInterval(id);
+  }, [reduced]);
+  const frame = useMascotAnim("listening", target, visible && !reduced);
+  return (
+    <div className="brand">
+      <span className="brand-mascot">
+        <MascotFace
+          skin={settings?.mascot_skin ?? "glass"}
+          size="m"
+          mode="listening"
+          level={reduced ? 0.25 : frame.level}
+          t={reduced ? 0 : frame.t}
+          blink={frame.blink}
+          uid="brand"
+        />
+      </span>
+      <span className="brand-name">Dicta</span>
+    </div>
+  );
+}
+
+function HotkeyHint() {
+  const { settings } = useSettings();
+  if (!settings) return null;
+  return (
+    <div className="hint-card">
+      <span className="hint-dot" aria-hidden />
+      <span>
+        Mantén <strong>{hotkeyLabel(settings.hotkey)}</strong> y habla
+      </span>
     </div>
   );
 }

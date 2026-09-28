@@ -1,7 +1,8 @@
-// Contract between the panel webview and the Rust core (src-tauri/src/commands.rs).
+// Contract between the app window and the Rust core (src-tauri/src/commands.rs).
 // Keep names in sync with the #[tauri::command] functions.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { MascotSize, Skin } from "../shared/MascotFace";
 
 export interface Dictation {
   id: number;
@@ -30,11 +31,15 @@ export interface Stats {
 }
 
 export interface Settings {
-  hotkey: string; // handy-keys syntax: "Fn", "CtrlRight", "OptRight", "Ctrl+Space"
+  hotkey: string; // handy-keys syntax: "Fn", "CtrlRight", "OptRight", "Cmd+Shift+D"
   language: string; // "auto" | ISO 639-1
   idle_unload_min: number; // 0 = never
   mascot_enabled: boolean;
+  mascot_skin: Skin; // "glass" | "jolly" | "dot" | "aura"
+  mascot_size: MascotSize; // "s" | "m" | "l"
   mic: string | null; // null = system default
+  launch_at_login: boolean;
+  storage_warn_mb: number; // warn when total storage exceeds this
 }
 
 export interface ModelStatus {
@@ -42,7 +47,7 @@ export interface ModelStatus {
   downloading: boolean;
   done: number; // bytes
   total: number; // bytes
-  loaded: boolean; // currently in RAM
+  loaded: boolean; // engine process running (model in RAM)
   error: string | null;
 }
 
@@ -51,14 +56,54 @@ export interface Permissions {
   microphone: boolean;
 }
 
+export type RuleKind = "correction" | "shortcut";
+
+/** Dictionary rule. correction: model writes `from` → we write `to`.
+ *  shortcut: you say `from` → `to` is pasted (e.g. "mi correo" → "yo@mail.com"). */
+export interface Rule {
+  id: number;
+  kind: RuleKind;
+  from: string;
+  to: string;
+  enabled: boolean;
+}
+
+export interface NewRule {
+  id: number | null; // null = create
+  kind: RuleKind;
+  from: string;
+  to: string;
+  enabled: boolean;
+}
+
+export interface StorageInfo {
+  model_bytes: number;
+  history_bytes: number;
+  total_bytes: number;
+  warn_bytes: number; // storage_warn_mb in bytes
+  dictations: number;
+}
+
 export const api = {
-  history: (query: string, offset: number) =>
-    invoke<Dictation[]>("get_history", { query, offset }),
+  history: (query: string, offset: number) => invoke<Dictation[]>("get_history", { query, offset }),
+  updateDictation: (id: number, text: string) => invoke<Dictation>("update_dictation", { id, text }),
   deleteDictation: (id: number) => invoke<void>("delete_dictation", { id }),
+  /** Deletes all history, or only entries older than N days. Returns how many were deleted. */
+  clearHistory: (olderThanDays: number | null) => invoke<number>("clear_history", { olderThanDays }),
   stats: () => invoke<Stats>("get_stats"),
+  storage: () => invoke<StorageInfo>("storage_info"),
+
   settings: () => invoke<Settings>("get_settings"),
-  saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }), // rejects with a message string if the hotkey is invalid
+  saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }), // rejects with a message string if invalid
+  /** Waits (max 10 s) for the user to press a key/combination and returns it, e.g. "Fn", "Cmd+Shift+D".
+   *  Returns null on Escape or timeout. Does not save — call saveSettings with the result. */
+  captureHotkey: () => invoke<string | null>("capture_hotkey"),
   microphones: () => invoke<string[]>("list_microphones"),
+
+  rules: () => invoke<Rule[]>("list_rules"),
+  saveRule: (rule: NewRule) => invoke<Rule>("save_rule", { rule }),
+  deleteRule: (id: number) => invoke<void>("delete_rule", { id }),
+
   modelStatus: () => invoke<ModelStatus>("model_status"),
   downloadModel: () => invoke<void>("download_model"),
   copyText: (text: string) => invoke<void>("copy_text", { text }),
@@ -71,7 +116,8 @@ export const events = {
   onHistoryChanged: (cb: () => void): Promise<UnlistenFn> => listen("history://changed", () => cb()),
   onModelStatus: (cb: (s: ModelStatus) => void): Promise<UnlistenFn> =>
     listen<ModelStatus>("model://status", (e) => cb(e.payload)),
-  /** Rust asks the panel to show a tab: "history" | "stats" | "settings". */
-  onShowTab: (cb: (tab: string) => void): Promise<UnlistenFn> =>
-    listen<string>("panel://tab", (e) => cb(e.payload)),
+  onSettingsChanged: (cb: (s: Settings) => void): Promise<UnlistenFn> =>
+    listen<Settings>("settings://changed", (e) => cb(e.payload)),
+  /** Rust asks the window to show a section: "home" | "history" | "dictionary" | "mascot" | "settings". */
+  onShowTab: (cb: (tab: string) => void): Promise<UnlistenFn> => listen<string>("panel://tab", (e) => cb(e.payload)),
 };

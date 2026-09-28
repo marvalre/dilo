@@ -63,3 +63,55 @@ export function langName(code: string | null): string {
 }
 
 export const errMsg = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : String(e));
+
+const weekdayFmt = new Intl.DateTimeFormat("es", { weekday: "long", day: "numeric", month: "short" });
+const weekdayYearFmt = new Intl.DateTimeFormat("es", { weekday: "long", day: "numeric", month: "short", year: "numeric" });
+
+export const fmtTime = (ts: number) => timeFmt.format(new Date(ts));
+
+/** Local-day key "YYYY-MM-DD" for a timestamp. */
+export function dayKey(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** Day header for history: "Hoy", "Ayer", "lunes 26 sep". */
+export function fmtDayHeader(ts: number, now = Date.now()): string {
+  const d = new Date(ts);
+  const n = new Date(now);
+  const day = startOfDay(d);
+  if (day === startOfDay(n)) return "Hoy";
+  if (day === new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1).getTime()) return "Ayer";
+  const f = d.getFullYear() === n.getFullYear() ? weekdayFmt : weekdayYearFmt;
+  return f.format(d).replace(",", "").replace(/\./g, "").replace("sept", "sep");
+}
+
+export const isToday = (ts: number, now = Date.now()) => startOfDay(new Date(ts)) === startOfDay(new Date(now));
+
+/** Monday-based start of the current week. */
+export function startOfWeek(now = Date.now()): number {
+  const n = new Date(now);
+  const dow = (n.getDay() + 6) % 7;
+  return new Date(n.getFullYear(), n.getMonth(), n.getDate() - dow).getTime();
+}
+
+const mbFmt = new Intl.NumberFormat("es", { maximumFractionDigits: 1 });
+
+/** "670 MB", "1,2 MB", "340 KB", "1,4 GB". */
+export function fmtBytes(b: number): string {
+  if (b < 1_000) return `${b} B`;
+  if (b < 1_000_000) return `${Math.round(b / 1_000)} KB`;
+  if (b < 1_000_000_000) {
+    const mb = b / 1_000_000;
+    return `${mb < 10 ? mbFmt.format(mb) : fmtNum(mb)} MB`;
+  }
+  return `${mbFmt.format(b / 1_000_000_000)} GB`;
+}
+
+export function greeting(now = new Date()): string {
+  const h = now.getHours();
+  if (h >= 6 && h < 13) return "Buenos días";
+  if (h >= 13 && h < 20) return "Buenas tardes";
+  return "Buenas noches";
+}

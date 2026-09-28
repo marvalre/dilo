@@ -1,93 +1,383 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, events, type Dictation } from "./api";
-import { useTauriEvent } from "./hooks";
-import HistoryItem from "./HistoryItem";
+import { useSettings, useTauriEvent } from "./hooks";
+import { dayKey, errMsg, fmtDayHeader, fmtDuration, fmtNum, fmtTime, isToday, langName, startOfWeek } from "./format";
+import { hotkeyLabel } from "./hotkey";
+import { CheckIcon, CopyIcon, PencilIcon, SearchIcon, TrashIcon } from "./icons";
+import { AutoTextarea, ConfirmDialog, PageHeader, Toast } from "./ui";
+import { MascotFace } from "../shared/MascotFace";
 
 const PAGE = 50;
+type Filter = "all" | "today" | "week";
+const FILTERS: { id: Filter; label: string }[] = [
+  { id: "all", label: "Todo" },
+  { id: "today", label: "Hoy" },
+  { id: "week", label: "Esta semana" },
+];
 
 export default function History() {
   const [input, setInput] = useState("");
   const [query, setQuery] = useState("");
-  const [items, setItems] = useState<Dictation[]>([]);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [items, setItems] = useState<Dictation[] | null>(null);
   const [hasMore, setHasMore] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const reqId = useRef(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [menu, setMenu] = useState(false);
+  const [confirmAll, setConfirmAll] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const loaded = useRef(0);
+  loaded.current = items?.length ?? 0;
+  const seq = useRef(0);
 
   useEffect(() => {
-    const t = setTimeout(() => setQuery(input.trim()), 200);
-    return () => clearTimeout(t);
+    const t = window.setTimeout(() => setQuery(input.trim()), 200);
+    return () => window.clearTimeout(t);
   }, [input]);
 
-  const load = useCallback(async (q: string, offset: number) => {
-    const id = ++reqId.current;
-    setLoading(true);
+  /** (Re)load from the start, keeping at least `count` rows. */
+  const reload = useCallback(async (q: string, count: number) => {
+    const my = ++seq.current;
     try {
-      const page = await api.history(q, offset);
-      if (id !== reqId.current) return;
-      setItems((prev) => (offset === 0 ? page : [...prev, ...page]));
-      setHasMore(page.length === PAGE);
-    } catch {
-      if (id === reqId.current && offset === 0) setItems([]);
-    } finally {
-      if (id === reqId.current) setLoading(false);
+      let all: Dictation[] = [];
+      let more = true;
+      while (more && all.length < Math.max(count, PAGE)) {
+        const page = await api.history(q, all.length);
+        all = all.concat(page);
+        more = page.length >= PAGE;
+      }
+      if (my !== seq.current) return;
+      setItems(all);
+      setHasMore(more);
+      setError(null);
+    } catch (e) {
+      if (my === seq.current) setError(errMsg(e));
     }
   }, []);
 
   useEffect(() => {
-    load(query, 0);
-  }, [query, load]);
+    reload(query, PAGE);
+  }, [query, reload]);
+  useTauriEvent(events.onHistoryChanged, () => reload(query, loaded.current));
 
-  useTauriEvent(events.onHistoryChanged, () => load(query, 0));
-
-  const remove = async (id: number) => {
+  const loadMore = async () => {
+    if (!items) return;
+    setLoadingMore(true);
     try {
-      await api.deleteDictation(id);
-      setItems((prev) => prev.filter((d) => d.id !== id));
-    } catch {
-      /* keep the item if deletion failed */
+      const page = await api.history(query, items.length);
+      setItems((prev) => [...(prev ?? []), ...page.filter((p) => !prev?.some((x) => x.id === p.id))]);
+      setHasMore(page.length >= PAGE);
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setLoadingMore(false);
     }
   };
 
-  return (
-    <div className="history">
-      <div className="search">
-        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-          <circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" strokeWidth="1.6" />
-          <path d="M11 11l3.5 3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-        </svg>
-        <input
-          type="search"
-          placeholder="Buscar en tus dictados"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          aria-label="Buscar"
-        />
-      </div>
+  const visible = useMemo(() => {
+    if (!items) return [];
+    if (filter === "today") return items.filter((d) => isToday(d.created_at));
+    if (filter === "week") {
+      const from = startOfWeek();
+      return items.filter((d) => d.created_at >= from);
+    }
+    return items;
+  }, [items, filter]);
 
-      {!loading && items.length === 0 ? (
-        <div className="empty">
-          {query ? (
-            <p>No hay dictados que coincidan con “{query}”.</p>
-          ) : (
-            <>
-              <div className="empty-key">fn</div>
-              <p>Mantén presionada la tecla Fn y habla. Todo lo que dictes aparecerá aquí.</p>
-            </>
-          )}
+  const groups = useMemo(() => {
+    const out: { key: string; label: string; items: Dictation[] }[] = [];
+    for (const d of visible) {
+      const k = dayKey(d.created_at);
+      const last = out[out.length - 1];
+      if (last && last.key === k) last.items.push(d);
+      else out.push({ key: k, label: fmtDayHeader(d.created_at), items: [d] });
+    }
+    return out;
+  }, [visible]);
+
+  const clear = async (days: number | null) => {
+    setMenu(false);
+    setConfirmAll(false);
+    try {
+      const n = await api.clearHistory(days);
+      setToast(n === 0 ? "No había dictados que eliminar" : `Se eliminaron ${fmtNum(n)} ${n === 1 ? "dictado" : "dictados"}`);
+      reload(query, PAGE);
+    } catch (e) {
+      setToast(errMsg(e));
+    }
+  };
+
+  const replace = (d: Dictation) => setItems((prev) => prev?.map((x) => (x.id === d.id ? d : x)) ?? null);
+  const remove = async (id: number) => {
+    setItems((prev) => prev?.filter((x) => x.id !== id) ?? null);
+    try {
+      await api.deleteDictation(id);
+    } catch (e) {
+      setToast(errMsg(e));
+      reload(query, loaded.current + 1);
+    }
+  };
+
+  const isEmptyDb = items !== null && items.length === 0 && query === "";
+  const showTools = items !== null && !isEmptyDb;
+
+  return (
+    <>
+      <PageHeader title="Historial">
+        {showTools && (
+          <div className="menu-anchor">
+            <button className="btn" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>
+              Limpiar…
+            </button>
+            {menu && (
+              <>
+                <div className="menu-backdrop" onMouseDown={() => setMenu(false)} />
+                <div className="menu" role="menu">
+                  <button role="menuitem" className="menu-item" onClick={() => clear(30)}>
+                    Más antiguos de 30 días
+                  </button>
+                  <div className="menu-sep" />
+                  <button
+                    role="menuitem"
+                    className="menu-item danger"
+                    onClick={() => {
+                      setMenu(false);
+                      setConfirmAll(true);
+                    }}
+                  >
+                    Todo el historial…
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </PageHeader>
+
+      {showTools && (
+        <div className="toolbar">
+          <label className="search">
+            <SearchIcon />
+            <input
+              type="search"
+              placeholder="Buscar en el historial"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && setInput("")}
+              spellCheck={false}
+            />
+          </label>
+          <div className="chips" role="radiogroup" aria-label="Filtrar por fecha">
+            {FILTERS.map((f) => (
+              <button
+                key={f.id}
+                role="radio"
+                aria-checked={filter === f.id}
+                className={filter === f.id ? "chip active" : "chip"}
+                onClick={() => setFilter(f.id)}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {error && <p className="error-text">{error}</p>}
+
+      {isEmptyDb ? (
+        <EmptyHistory />
+      ) : items && visible.length === 0 ? (
+        <div className="empty small-empty">
+          <p className="empty-title">{query ? "Sin resultados" : "Nada por aquí"}</p>
+          <p className="empty-text">
+            {query ? `No hay dictados que contengan “${query}”.` : filter === "today" ? "Hoy aún no has dictado nada." : "Esta semana aún no has dictado nada."}
+          </p>
         </div>
       ) : (
-        <ul className="list">
-          {items.map((d) => (
-            <HistoryItem key={d.id} item={d} onDelete={() => remove(d.id)} />
-          ))}
-        </ul>
+        groups.map((g) => (
+          <section key={g.key} className="day">
+            <h2 className="day-header">{g.label}</h2>
+            <div className="list">
+              {g.items.map((d) => (
+                <HistoryRow key={d.id} d={d} onReplace={replace} onDelete={() => remove(d.id)} onError={setToast} />
+              ))}
+            </div>
+          </section>
+        ))
       )}
 
-      {hasMore && (
-        <button className="btn btn-ghost more" disabled={loading} onClick={() => load(query, items.length)}>
-          {loading ? "Cargando…" : "Cargar más"}
-        </button>
+      {hasMore && visible.length > 0 && (
+        <div className="load-more">
+          <button className="btn" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore ? "Cargando…" : "Cargar más"}
+          </button>
+        </div>
       )}
+
+      {confirmAll && (
+        <ConfirmDialog
+          title="¿Borrar todo el historial?"
+          message="Se eliminarán todos tus dictados de este Mac. Tus estadísticas volverán a cero. Esta acción no se puede deshacer."
+          confirmLabel="Borrar todo"
+          destructive
+          onConfirm={() => clear(null)}
+          onCancel={() => setConfirmAll(false)}
+        />
+      )}
+      {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+    </>
+  );
+}
+
+function EmptyHistory() {
+  const { settings } = useSettings();
+  return (
+    <div className="empty">
+      <div className="empty-mascot">
+        <MascotFace skin={settings?.mascot_skin ?? "glass"} size="l" mode="listening" level={0.35} t={420} blink={false} uid="empty" />
+      </div>
+      <p className="empty-title">Tu historial está vacío</p>
+      <p className="empty-text">
+        Mantén <strong>{settings ? hotkeyLabel(settings.hotkey) : "fn"}</strong> y habla. Todo lo que dictes aparecerá aquí.
+      </p>
+    </div>
+  );
+}
+
+function HistoryRow({
+  d,
+  onReplace,
+  onDelete,
+  onError,
+}: {
+  d: Dictation;
+  onReplace: (d: Dictation) => void;
+  onDelete: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(d.text);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const t = window.setTimeout(() => setCopied(false), 1200);
+    return () => window.clearTimeout(t);
+  }, [copied]);
+
+  const copy = () => {
+    api
+      .copyText(d.text)
+      .catch(() => navigator.clipboard.writeText(d.text))
+      .then(() => setCopied(true))
+      .catch((e) => onError(errMsg(e)));
+  };
+
+  const save = async () => {
+    const text = draft.trim();
+    if (!text || text === d.text) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      onReplace(await api.updateDictation(d.id, text));
+      setEditing(false);
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const meta = [
+    `${fmtNum(d.word_count)} ${d.word_count === 1 ? "palabra" : "palabras"}`,
+    fmtDuration(d.duration_ms),
+    d.app_name,
+    d.language ? langName(d.language) : null,
+  ].filter(Boolean);
+
+  if (editing) {
+    return (
+      <div className="row row-editing">
+        <span className="row-time">{fmtTime(d.created_at)}</span>
+        <div className="row-body">
+          <AutoTextarea
+            className="edit-area"
+            value={draft}
+            autoFocusEnd
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && e.metaKey) {
+                e.preventDefault();
+                save();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setDraft(d.text);
+                setEditing(false);
+              }
+            }}
+          />
+          <div className="edit-actions">
+            <span className="edit-hint">⌘↩ para guardar · esc para cancelar</span>
+            <button
+              className="btn btn-sm"
+              onClick={() => {
+                setDraft(d.text);
+                setEditing(false);
+              }}
+            >
+              Cancelar
+            </button>
+            <button className="btn btn-sm btn-primary" onClick={save} disabled={saving}>
+              Guardar
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={d.error ? "row row-error" : "row"}>
+      <span className="row-time">{fmtTime(d.created_at)}</span>
+      <div className="row-body">
+        {d.error ? (
+          <p className="row-text">{d.text ? d.text : <span className="row-error-msg">{d.error}</span>}</p>
+        ) : (
+          <p className="row-text">{d.text}</p>
+        )}
+        <p className="row-meta">
+          {d.error && d.text ? <span className="row-error-msg">{d.error} · </span> : null}
+          {meta.join(" · ")}
+        </p>
+      </div>
+      <div className="row-actions">
+        {!d.error && (
+          <button className={copied ? "icon-btn done" : "icon-btn"} onClick={copy} title="Copiar" aria-label="Copiar">
+            {copied ? <CheckIcon /> : <CopyIcon />}
+            {copied && <span className="icon-btn-label">Copiado</span>}
+          </button>
+        )}
+        {!d.error && (
+          <button
+            className="icon-btn"
+            onClick={() => {
+              setDraft(d.text);
+              setEditing(true);
+            }}
+            title="Editar"
+            aria-label="Editar"
+          >
+            <PencilIcon />
+          </button>
+        )}
+        <button className="icon-btn danger" onClick={onDelete} title="Eliminar" aria-label="Eliminar">
+          <TrashIcon />
+        </button>
+      </div>
     </div>
   );
 }
