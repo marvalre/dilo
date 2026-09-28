@@ -1,5 +1,6 @@
 //! SQLite history of every dictation. One table, see spec §6.
 
+use crate::rules::{Rule, RuleKind};
 use crate::stats::{self, count_words, Stats};
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -45,6 +46,13 @@ CREATE TABLE IF NOT EXISTS dictations (
   error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_dictations_created ON dictations(created_at);
+CREATE TABLE IF NOT EXISTS rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  src TEXT NOT NULL,
+  dst TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1
+);
 ";
 
 const COLUMNS: &str = "id, created_at, duration_ms, text, word_count, language, app_name, error";
@@ -119,6 +127,87 @@ impl Store {
         Ok(())
     }
 
+    /// Replaces a dictation's text (user edit) and recomputes its word count.
+    pub fn update_text(&self, id: i64, text: &str) -> Result<Option<Dictation>> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE dictations SET text = ?1, word_count = ?2, error = NULL WHERE id = ?3",
+            params![text, count_words(text), id],
+        )?;
+        self.get(id)
+    }
+
+    /// Deletes everything, or only rows created before `before_ms`. Returns rows deleted.
+    pub fn clear(&self, before_ms: Option<i64>) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let n = match before_ms {
+            Some(ms) => conn.execute("DELETE FROM dictations WHERE created_at < ?1", [ms])?,
+            None => conn.execute("DELETE FROM dictations", [])?,
+        };
+        // Give the space back to the disk.
+        conn.execute_batch("VACUUM")?;
+        Ok(n)
+    }
+
+    pub fn count(&self) -> Result<u64> {
+        Ok(self.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM dictations", [], |r| r.get(0))?)
+    }
+
+    /// Size of the database in bytes (pages in use × page size).
+    pub fn size_bytes(&self) -> Result<u64> {
+        let conn = self.conn.lock().unwrap();
+        let pages: u64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+        let size: u64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+        Ok(pages * size)
+    }
+
+    pub fn rules(&self) -> Result<Vec<Rule>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, kind, src, dst, enabled FROM rules ORDER BY id DESC")?;
+        let rows = stmt.query_map([], |r| {
+            let kind: String = r.get(1)?;
+            Ok(Rule {
+                id: r.get(0)?,
+                kind: RuleKind::parse(&kind).unwrap_or(RuleKind::Correction),
+                from: r.get(2)?,
+                to: r.get(3)?,
+                enabled: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Inserts when `id` is None, updates otherwise. Returns the stored rule.
+    pub fn save_rule(&self, id: Option<i64>, kind: RuleKind, from: &str, to: &str, enabled: bool) -> Result<Rule> {
+        let id = {
+            let conn = self.conn.lock().unwrap();
+            match id {
+                Some(id) => {
+                    conn.execute(
+                        "UPDATE rules SET kind = ?1, src = ?2, dst = ?3, enabled = ?4 WHERE id = ?5",
+                        params![kind.as_str(), from.trim(), to, enabled, id],
+                    )?;
+                    id
+                }
+                None => {
+                    conn.execute(
+                        "INSERT INTO rules (kind, src, dst, enabled) VALUES (?1, ?2, ?3, ?4)",
+                        params![kind.as_str(), from.trim(), to, enabled],
+                    )?;
+                    conn.last_insert_rowid()
+                }
+            }
+        };
+        self.rules()?
+            .into_iter()
+            .find(|r| r.id == id)
+            .ok_or_else(|| anyhow::anyhow!("rule {id} not found"))
+    }
+
+    pub fn delete_rule(&self, id: i64) -> Result<()> {
+        self.conn.lock().unwrap().execute("DELETE FROM rules WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     /// Stats in the user's local time zone. Failed dictations are excluded.
     pub fn stats(&self, now_ms: i64) -> Result<Stats> {
         Ok(stats::compute(&self.entries()?, now_ms, &chrono::Local))
@@ -175,6 +264,26 @@ mod tests {
         assert_eq!(s.list(Some("LECHE"), 50, 0).unwrap().len(), 1);
         s.delete(a.id).unwrap();
         assert!(s.get(a.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn edit_clear_and_rules() {
+        let s = Store::open_in_memory().unwrap();
+        let a = s.insert(new("hola", 1_000)).unwrap();
+        s.insert(new("viejo", 500)).unwrap();
+        let edited = s.update_text(a.id, "hola mundo bonito").unwrap().unwrap();
+        assert_eq!((edited.text.as_str(), edited.word_count), ("hola mundo bonito", 3));
+        assert_eq!(s.clear(Some(900)).unwrap(), 1);
+        assert_eq!(s.count().unwrap(), 1);
+        assert!(s.size_bytes().unwrap() > 0);
+
+        let r = s.save_rule(None, RuleKind::Shortcut, " mi correo ", "a@x.com", true).unwrap();
+        assert_eq!(r.from, "mi correo");
+        let r2 = s.save_rule(Some(r.id), RuleKind::Shortcut, "mi correo", "b@x.com", false).unwrap();
+        assert_eq!((r2.to.as_str(), r2.enabled), ("b@x.com", false));
+        s.delete_rule(r.id).unwrap();
+        assert!(s.rules().unwrap().is_empty());
+        assert_eq!(s.clear(None).unwrap(), 1);
     }
 
     #[test]

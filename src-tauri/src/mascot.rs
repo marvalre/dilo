@@ -8,9 +8,9 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
 
 pub const LABEL: &str = "mascot";
-const SIZE: f64 = 72.0;
+const SIZE: f64 = 56.0;
 /// Mascot center sits this far right/below the cursor tip.
-const OFFSET: f64 = 30.0;
+const OFFSET: f64 = 22.0;
 /// Fraction of the remaining distance covered each frame (trailing effect).
 const FOLLOW: f64 = 0.35;
 /// Time the swallow animation needs before the window hides (see mascot.css).

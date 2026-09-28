@@ -7,6 +7,7 @@ pub mod models;
 pub mod paste;
 pub mod permissions;
 pub mod recorder;
+pub mod rules;
 pub mod settings;
 pub mod stats;
 pub mod store;
@@ -31,12 +32,25 @@ pub fn open_panel(app: &AppHandle, tab: Option<&str>) {
                 };
                 match WebviewWindowBuilder::new(&app2, PANEL, WebviewUrl::App(url.into()))
                     .title("Dicta")
-                    .inner_size(440.0, 620.0)
-                    .min_inner_size(380.0, 480.0)
+                    .inner_size(920.0, 640.0)
+                    .min_inner_size(760.0, 520.0)
                     .center()
                     .build()
                 {
-                    Ok(w) => w,
+                    Ok(w) => {
+                        // Show in the Dock while the window is open; back to menu-bar only when closed.
+                        #[cfg(target_os = "macos")]
+                        {
+                            let _ = app2.set_activation_policy(tauri::ActivationPolicy::Regular);
+                            let h = app2.clone();
+                            w.on_window_event(move |e| {
+                                if let tauri::WindowEvent::Destroyed = e {
+                                    let _ = h.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                                }
+                            });
+                        }
+                        w
+                    }
                     Err(e) => return log::error!("panel: {e}"),
                 }
             }
@@ -54,8 +68,16 @@ pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,ort=warn,enigo=warn,transcribe_rs=warn")).init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .invoke_handler(tauri::generate_handler![
             commands::get_history,
+            commands::update_dictation,
+            commands::clear_history,
+            commands::storage_info,
+            commands::capture_hotkey,
+            commands::list_rules,
+            commands::save_rule,
+            commands::delete_rule,
             commands::delete_dictation,
             commands::get_stats,
             commands::get_settings,

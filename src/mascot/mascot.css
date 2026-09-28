@@ -1,153 +1,78 @@
-:root {
-  --body: #f5eee6;
-  --body-hi: #fffaf4;
-  --body-lo: #e6d9cb;
-  --ink: #1c1c22;
-  --outline: rgba(20, 20, 25, 0.18);
-  --cheek: rgba(255, 122, 89, 0.28);
-}
 html,
 body,
 #root {
   margin: 0;
-  width: 72px;
-  height: 72px;
+  width: 100%;
+  height: 100%;
   background: transparent !important;
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
-  cursor: default;
 }
 .stage {
-  width: 72px;
-  height: 72px;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-svg {
-  display: block;
-  overflow: visible;
-  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.28));
-}
-.breath {
+.creature {
   transition: transform 60ms linear;
 }
-.creature,
-.breath,
-.body,
-.features {
-  transform-box: view-box;
-  transform-origin: 36px 36px;
-}
 
-/* Enter: pop in with a small overshoot. */
+/* Enter: quick pop with a hint of overshoot. */
 .state-listening .creature {
-  animation: pop-in 240ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  animation: pop-in 220ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 @keyframes pop-in {
   from {
     opacity: 0;
-    transform: scale(0.3);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
+    transform: scale(0.4);
   }
 }
 
-/* Thinking: gentle bob + eyes glance up. */
-.state-thinking .creature {
-  animation: bob 900ms ease-in-out infinite;
-}
-@keyframes bob {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-2px);
-  }
-}
-.thinking-eyes {
-  animation: glance 900ms ease-in-out infinite;
-}
-@keyframes glance {
-  0%,
-  100% {
-    transform: translate(0, 0);
-  }
-  50% {
-    transform: translate(0.8px, -0.8px);
-  }
-}
-
-/* Done: happy little hop. */
 .state-done .creature {
-  animation: hop 260ms ease-out both;
+  animation: hop 240ms ease-out;
 }
 @keyframes hop {
-  0% {
-    transform: translateY(0) scale(1);
-  }
   45% {
-    transform: translateY(-3px) scale(1.05);
-  }
-  100% {
-    transform: translateY(0) scale(1);
+    transform: translateY(-2px) scale(1.06);
   }
 }
 
-/* Swallow itself: features are sucked into the center, then the body
-   squashes and implodes with a small twist down to a dot. */
-.state-swallow .features {
-  animation: suck 130ms cubic-bezier(0.55, 0, 1, 0.45) forwards;
-}
-@keyframes suck {
-  to {
-    transform: scale(0);
-    opacity: 0;
-  }
-}
-.state-swallow .body {
-  animation: implode 290ms cubic-bezier(0.6, -0.28, 0.74, 0.05) 70ms forwards;
+/* Swallow itself: squash, twist and implode to a point. */
+.state-swallow .creature {
+  animation: implode 320ms cubic-bezier(0.6, -0.28, 0.74, 0.05) forwards;
 }
 @keyframes implode {
-  0% {
-    transform: scale(1, 1) rotate(0);
-  }
   35% {
-    transform: scale(1.14, 0.86) rotate(6deg);
+    transform: scale(1.12, 0.88) rotate(6deg);
   }
   100% {
-    transform: scale(0.05, 0.05) rotate(25deg);
-    opacity: 0.6;
+    transform: scale(0.02) rotate(30deg);
+    opacity: 0.4;
   }
 }
 
 .state-sad .creature,
 .state-confused .creature {
-  animation: shake 360ms ease-in-out both;
+  animation: shake 340ms ease-in-out;
 }
 @keyframes shake {
-  0%,
-  100% {
-    transform: translateX(0);
-  }
   25% {
-    transform: translateX(-2px);
+    transform: translateX(-1.5px);
   }
   75% {
-    transform: translateX(2px);
+    transform: translateX(1.5px);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .creature,
-  .body,
-  .features,
-  .thinking-eyes {
+  .creature {
     animation: none !important;
-    transition: opacity 150ms linear;
   }
   .state-swallow .creature {
     opacity: 0;
+    transition: opacity 150ms linear;
   }
 }

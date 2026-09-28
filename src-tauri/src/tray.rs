@@ -34,12 +34,13 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let language = Submenu::with_items(app, "Idioma", true, &lang_refs)?;
 
     let hint = MenuItem::with_id(app, "hint", format!("Mantén {hotkey} y habla"), false, None::<&str>)?;
+    let home = MenuItem::with_id(app, "open:home", "Abrir Dicta…", true, None::<&str>)?;
     let history = MenuItem::with_id(app, "open:history", "Historial…", true, None::<&str>)?;
-    let stats = MenuItem::with_id(app, "open:stats", "Estadísticas…", true, None::<&str>)?;
+    let stats = MenuItem::with_id(app, "open:dictionary", "Diccionario…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "open:settings", "Ajustes…", true, Some("CmdOrCtrl+,"))?;
     let quit = MenuItem::with_id(app, "quit", "Salir de Dicta", true, Some("CmdOrCtrl+Q"))?;
     let sep = || PredefinedMenuItem::separator(app);
-    Menu::with_items(app, &[&hint, &sep()?, &history, &stats, &settings, &language, &sep()?, &quit])
+    Menu::with_items(app, &[&hint, &sep()?, &home, &history, &stats, &settings, &language, &sep()?, &quit])
 }
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
@@ -61,7 +62,8 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                 let mut s = core.settings.read().unwrap().clone();
                 s.language = code.to_string();
                 let _ = s.save(&core.data_dir);
-                *core.settings.write().unwrap() = s;
+                *core.settings.write().unwrap() = s.clone();
+                let _ = tauri::Emitter::emit(app, "settings://changed", &s);
                 refresh(app);
             }
         })

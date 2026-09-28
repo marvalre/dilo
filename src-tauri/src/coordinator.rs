@@ -33,6 +33,8 @@ pub struct Core {
     pub hotkey: Mutex<Option<hotkey::HotkeyHandle>>,
     pub model: Mutex<ModelStatus>,
     busy: AtomicBool,
+    /// True while the app is recording a new hotkey: dictation is paused.
+    pub capturing: AtomicBool,
     press: Mutex<Option<Press>>,
 }
 
@@ -56,6 +58,7 @@ impl Core {
             hotkey: Mutex::new(None),
             model: Mutex::new(ModelStatus::default()),
             busy: AtomicBool::new(false),
+            capturing: AtomicBool::new(false),
             press: Mutex::new(None),
         }))
     }
@@ -86,6 +89,9 @@ pub fn on_hotkey(app: &AppHandle, pressed: bool) {
 }
 
 fn on_press(app: &AppHandle, core: &Arc<Core>) {
+    if core.capturing.load(Ordering::SeqCst) {
+        return;
+    }
     if core.busy.swap(true, Ordering::SeqCst) {
         return; // still transcribing the previous one
     }
@@ -168,7 +174,9 @@ fn complete(app: &AppHandle, core: &Core, recording: Recording, started_at: i64,
             mascot::swallow(app);
             return;
         }
-        Ok(text) => {
+        Ok(raw) => {
+            let rules = core.store.rules().unwrap_or_default();
+            let text = crate::rules::apply(&raw, &rules);
             if let Err(e) = paste::paste_text(&text) {
                 log::error!("paste: {e:#}");
             }

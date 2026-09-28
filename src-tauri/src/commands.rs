@@ -1,6 +1,7 @@
 //! Tauri commands used by the panel (see src/panel/api.ts for the TS side).
 
 use crate::coordinator::{Core, ModelStatus};
+use crate::rules::{Rule, RuleKind};
 use crate::{hotkey, models, settings::Settings, stats::Stats, store::Dictation};
 use cpal::traits::{DeviceTrait, HostTrait};
 use std::sync::Arc;
@@ -31,6 +32,59 @@ pub fn get_stats(core: Core_) -> Result<Stats, String> {
 }
 
 #[tauri::command]
+pub fn update_dictation(app: AppHandle, core: Core_, id: i64, text: String) -> Result<Dictation, String> {
+    let d = core.store.update_text(id, &text).map_err(err)?.ok_or("Dictado no encontrado")?;
+    let _ = app.emit("history://changed", ());
+    Ok(d)
+}
+
+#[tauri::command]
+pub fn clear_history(app: AppHandle, core: Core_, older_than_days: Option<u32>) -> Result<usize, String> {
+    let before = older_than_days.map(|d| crate::coordinator::now_ms() - d as i64 * 86_400_000);
+    let n = core.store.clear(before).map_err(err)?;
+    let _ = app.emit("history://changed", ());
+    Ok(n)
+}
+
+#[derive(serde::Serialize)]
+pub struct StorageInfo {
+    model_bytes: u64,
+    history_bytes: u64,
+    total_bytes: u64,
+    warn_bytes: u64,
+    dictations: u64,
+}
+
+fn dir_size(path: &std::path::Path) -> u64 {
+    std::fs::read_dir(path)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| match e.metadata() {
+                    Ok(m) if m.is_dir() => dir_size(&e.path()),
+                    Ok(m) => m.len(),
+                    Err(_) => 0,
+                })
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+#[tauri::command]
+pub fn storage_info(core: Core_) -> Result<StorageInfo, String> {
+    let model_bytes = dir_size(&core.data_dir.join("models"));
+    let history_bytes = core.store.size_bytes().map_err(err)?;
+    let warn_mb = core.settings.read().unwrap().storage_warn_mb;
+    Ok(StorageInfo {
+        model_bytes,
+        history_bytes,
+        total_bytes: model_bytes + history_bytes,
+        warn_bytes: warn_mb * 1_000_000,
+        dictations: core.store.count().map_err(err)?,
+    })
+}
+
+#[tauri::command]
 pub fn get_settings(core: Core_) -> Settings {
     core.settings.read().unwrap().clone()
 }
@@ -38,16 +92,67 @@ pub fn get_settings(core: Core_) -> Settings {
 #[tauri::command]
 pub fn save_settings(app: AppHandle, core: Core_, settings: Settings) -> Result<(), String> {
     hotkey::validate(&settings.hotkey).map_err(|e| format!("Tecla no válida: {e}"))?;
-    let old_hotkey = core.settings.read().unwrap().hotkey.clone();
+    let settings = settings.sanitized();
+    let old = core.settings.read().unwrap().clone();
     settings.save(&core.data_dir).map_err(err)?;
-    if settings.hotkey != old_hotkey {
+    if settings.hotkey != old.hotkey {
         if let Some(h) = core.hotkey.lock().unwrap().as_ref() {
             h.set(&settings.hotkey);
         }
     }
-    *core.settings.write().unwrap() = settings;
+    if settings.launch_at_login != old.launch_at_login {
+        use tauri_plugin_autostart::ManagerExt;
+        let al = app.autolaunch();
+        let r = if settings.launch_at_login { al.enable() } else { al.disable() };
+        if let Err(e) = r {
+            log::error!("autostart: {e}");
+        }
+    }
+    *core.settings.write().unwrap() = settings.clone();
+    let _ = app.emit("settings://changed", &settings);
     crate::tray::refresh(&app);
     Ok(())
+}
+
+/// Blocks until the user presses a key/combination (max 10 s). Dictation is paused meanwhile.
+#[tauri::command]
+pub async fn capture_hotkey(core: State<'_, Arc<Core>>) -> Result<Option<String>, String> {
+    use std::sync::atomic::Ordering;
+    let core = core.inner().clone();
+    core.capturing.store(true, Ordering::SeqCst);
+    let result = tauri::async_runtime::spawn_blocking(|| hotkey::capture(std::time::Duration::from_secs(10)))
+        .await
+        .map_err(err)
+        .and_then(|r| r.map_err(err));
+    core.capturing.store(false, Ordering::SeqCst);
+    result
+}
+
+#[tauri::command]
+pub fn list_rules(core: Core_) -> Result<Vec<Rule>, String> {
+    core.store.rules().map_err(err)
+}
+
+#[derive(serde::Deserialize)]
+pub struct NewRule {
+    id: Option<i64>,
+    kind: RuleKind,
+    from: String,
+    to: String,
+    enabled: bool,
+}
+
+#[tauri::command]
+pub fn save_rule(core: Core_, rule: NewRule) -> Result<Rule, String> {
+    if rule.from.trim().is_empty() {
+        return Err("Escribe la palabra o frase".into());
+    }
+    core.store.save_rule(rule.id, rule.kind, &rule.from, &rule.to, rule.enabled).map_err(err)
+}
+
+#[tauri::command]
+pub fn delete_rule(core: Core_, id: i64) -> Result<(), String> {
+    core.store.delete_rule(id).map_err(err)
 }
 
 #[tauri::command]

@@ -16,8 +16,15 @@ pub struct Settings {
     /// Free the model from RAM after this many idle minutes (0 = never).
     pub idle_unload_min: u32,
     pub mascot_enabled: bool,
+    /// "glass" | "jolly" | "dot" | "aura"
+    pub mascot_skin: String,
+    /// "s" | "m" | "l"
+    pub mascot_size: String,
     /// Input device name; None = system default.
     pub mic: Option<String>,
+    pub launch_at_login: bool,
+    /// Warn in the app when total storage (model + history) exceeds this.
+    pub storage_warn_mb: u64,
 }
 
 impl Default for Settings {
@@ -27,7 +34,11 @@ impl Default for Settings {
             language: "auto".into(),
             idle_unload_min: 5,
             mascot_enabled: true,
+            mascot_skin: "glass".into(),
+            mascot_size: "m".into(),
             mic: None,
+            launch_at_login: false,
+            storage_warn_mb: 2000,
         }
     }
 }
@@ -40,12 +51,27 @@ pub fn default_hotkey() -> &'static str {
     }
 }
 
+pub const SKINS: [&str; 4] = ["glass", "jolly", "dot", "aura"];
+pub const SIZES: [&str; 3] = ["s", "m", "l"];
+
 impl Settings {
+    /// Fixes out-of-range values coming from the UI or an old settings file.
+    pub fn sanitized(mut self) -> Self {
+        if !SKINS.contains(&self.mascot_skin.as_str()) {
+            self.mascot_skin = "glass".into();
+        }
+        if !SIZES.contains(&self.mascot_size.as_str()) {
+            self.mascot_size = "m".into();
+        }
+        self
+    }
+
     pub fn load(dir: &Path) -> Settings {
         std::fs::read_to_string(dir.join(FILE))
             .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
+            .and_then(|s| serde_json::from_str::<Settings>(&s).ok())
             .unwrap_or_default()
+            .sanitized()
     }
 
     pub fn save(&self, dir: &Path) -> Result<()> {
