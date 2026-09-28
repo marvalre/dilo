@@ -1,0 +1,82 @@
+//! Menu-bar / system-tray icon and menu.
+
+use crate::coordinator::Core;
+use std::sync::Arc;
+use tauri::image::Image;
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Manager, Wry};
+
+const TRAY_ID: &str = "dicta";
+pub const LANGUAGES: [(&str, &str); 7] = [
+    ("auto", "Automático"),
+    ("es", "Español"),
+    ("en", "English"),
+    ("fr", "Français"),
+    ("de", "Deutsch"),
+    ("pt", "Português"),
+    ("it", "Italiano"),
+];
+
+fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
+    let core = app.state::<Arc<Core>>();
+    let current = core.settings.read().unwrap().language.clone();
+    let hotkey = core.settings.read().unwrap().hotkey.clone();
+
+    let langs = LANGUAGES
+        .iter()
+        .map(|(code, name)| {
+            CheckMenuItem::with_id(app, format!("lang:{code}"), *name, true, *code == current, None::<&str>)
+        })
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let lang_refs: Vec<&dyn tauri::menu::IsMenuItem<Wry>> =
+        langs.iter().map(|i| i as &dyn tauri::menu::IsMenuItem<Wry>).collect();
+    let language = Submenu::with_items(app, "Idioma", true, &lang_refs)?;
+
+    let hint = MenuItem::with_id(app, "hint", format!("Mantén {hotkey} y habla"), false, None::<&str>)?;
+    let history = MenuItem::with_id(app, "open:history", "Historial…", true, None::<&str>)?;
+    let stats = MenuItem::with_id(app, "open:stats", "Estadísticas…", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "open:settings", "Ajustes…", true, Some("CmdOrCtrl+,"))?;
+    let quit = MenuItem::with_id(app, "quit", "Salir de Dicta", true, Some("CmdOrCtrl+Q"))?;
+    let sep = || PredefinedMenuItem::separator(app);
+    Menu::with_items(app, &[&hint, &sep()?, &history, &stats, &settings, &language, &sep()?, &quit])
+}
+
+pub fn create(app: &AppHandle) -> tauri::Result<()> {
+    let icon = Image::from_bytes(include_bytes!("../icons/tray.png"))?;
+    TrayIconBuilder::with_id(TRAY_ID)
+        .icon(icon)
+        .icon_as_template(true)
+        .tooltip("Dicta")
+        .menu(&build_menu(app)?)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| {
+            let id = event.id().as_ref();
+            if id == "quit" {
+                app.exit(0);
+            } else if let Some(tab) = id.strip_prefix("open:") {
+                crate::open_panel(app, Some(tab));
+            } else if let Some(code) = id.strip_prefix("lang:") {
+                let core = app.state::<Arc<Core>>();
+                let mut s = core.settings.read().unwrap().clone();
+                s.language = code.to_string();
+                let _ = s.save(&core.data_dir);
+                *core.settings.write().unwrap() = s;
+                refresh(app);
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } = event {
+                crate::open_panel(tray.app_handle(), None);
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
+/// Rebuilds the menu so check marks and the hotkey hint stay current.
+pub fn refresh(app: &AppHandle) {
+    if let (Some(tray), Ok(menu)) = (app.tray_by_id(TRAY_ID), build_menu(app)) {
+        let _ = tray.set_menu(Some(menu));
+    }
+}

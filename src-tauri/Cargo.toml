@@ -33,6 +33,7 @@ whatlang = "0.16"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication"] }
 objc2-foundation = { version = "0.3", features = ["NSString"] }
+objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat"] }
 
 [dev-dependencies]
 tempfile = "3"
