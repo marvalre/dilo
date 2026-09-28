@@ -32,6 +32,26 @@ Our twist: a **cute mascot ("el monito")** — a small cream ball with two dot e
 Spec: `docs/superpowers/specs/2026-09-28-dicta-design.md`
 Plan: `docs/superpowers/plans/2026-09-28-dicta-v1.md`
 
+## 2b. v2 (2026-09-28 evening) — owner feedback after first real test
+
+Owner dictated with it successfully, then asked for:
+1. Mascot much smaller + "pro/Apple" look. References: Clicky (tiny cursor buddy) and Meta Muse's mascot "Jolly"
+   (beady oval eyes, minimal smile). Mouth must be **sound-wave BARS** (like Siri/Voice Memos), not a sine line.
+   → 4 skins in `src/shared/MascotFace.tsx`: **glass (default)**, jolly, dot, aura; sizes s/m/l (m ≈ 26–30 px).
+2. A real app window "like Wispr Flow": sidebar (Inicio, Historial, Diccionario, Monito, Ajustes), shows in Dock while open.
+3. Editable: history texts, personal dictionary (corrections), shortcuts (say X → paste Y), mascot appearance.
+4. Storage bar on Home (model + history) with a warning threshold (setting `storage_warn_mb`).
+5. Choose the dictation key by pressing it ("Cambiar" → `capture_hotkey` command → handy-keys KeyboardListener).
+
+Backend for all of this is in: `rules.rs` (dictionary, tested), `store.rs` (rules table, update_text, clear, size_bytes),
+`hotkey.rs::capture`, `commands.rs` (update_dictation, clear_history, storage_info, capture_hotkey, list_rules, save_rule,
+delete_rule), `settings.rs` (mascot_skin, mascot_size, launch_at_login, storage_warn_mb), `lib.rs` (Dock policy, autostart).
+Frontend contract: `src/panel/api.ts`. Events added: `settings://changed`.
+
+**Signing (important):** build with `./scripts/build-local.sh` — it signs with the first local codesigning identity
+so macOS keeps Accessibility/Mic grants across rebuilds. Plain `bun tauri build` = ad-hoc signature = the user must
+re-grant Accessibility after every build (symptom: log says "Accessibility permission not granted", Fn does nothing).
+
 ## 3. Where things are
 
 ```
