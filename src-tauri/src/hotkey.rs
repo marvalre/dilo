@@ -27,15 +27,27 @@ pub fn spawn(hotkey: &str, on_event: impl Fn(bool) + Send + 'static) -> Result<H
     let initial = hotkey.to_string();
 
     std::thread::Builder::new().name("hotkey".into()).spawn(move || {
-        let manager = match HotkeyManager::new() {
-            Ok(m) => m,
-            Err(e) => {
-                let _ = ready_tx.send(Err(format!("hotkey manager: {e}")));
-                return;
+        let _ = ready_tx.send(Ok(()));
+        // Without Accessibility permission the manager can't start. Keep retrying so
+        // the key starts working as soon as the user grants it — no restart needed.
+        let mut warned = false;
+        let manager = loop {
+            match HotkeyManager::new() {
+                Ok(m) => break m,
+                Err(e) => {
+                    if !warned {
+                        log::warn!("hotkey manager: {e} (retrying until permission is granted)");
+                        warned = true;
+                    }
+                    std::thread::sleep(Duration::from_secs(2));
+                }
             }
         };
-        let mut current: Option<HotkeyId> = register(&manager, &initial);
-        let _ = ready_tx.send(Ok(()));
+        let mut pending = None;
+        while let Ok(next) = rx.try_recv() {
+            pending = Some(next); // key changed while waiting for permission
+        }
+        let mut current: Option<HotkeyId> = register(&manager, pending.as_deref().unwrap_or(&initial));
         let mut held = false;
         loop {
             if let Ok(next) = rx.try_recv() {
