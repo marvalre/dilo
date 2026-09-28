@@ -87,6 +87,16 @@ pub fn run() {
                 Err(e) => log::error!("hotkey: {e:#}"),
             }
 
+            if let Ok(wav) = std::env::var("DICTA_SIMULATE_WAV") {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(4));
+                    if let Err(e) = coordinator::simulate(&handle, std::path::Path::new(&wav)) {
+                        log::error!("simulate: {e:#}");
+                    }
+                });
+            }
+
             let needs_setup = !models::is_ready(&core.model_dir())
                 || !hotkey::has_accessibility()
                 || !permissions::microphone_granted();

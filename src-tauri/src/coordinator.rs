@@ -1,6 +1,7 @@
 //! Push-to-talk flow: key down → record → key up → transcribe → paste → save.
 
-use crate::{engine::Engine, hotkey, mascot, models, paste, recorder::Recorder, settings::Settings, store::*};
+use crate::recorder::{Recorder, Recording};
+use crate::{engine::Engine, hotkey, mascot, models, paste, settings::Settings, store::*};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -146,7 +147,10 @@ fn finish(app: &AppHandle, core: &Core) {
     };
     let press = core.press.lock().unwrap().take();
     let (started_at, app_name) = press.map(|p| (p.started_at, p.app_name)).unwrap_or((now_ms(), None));
+    complete(app, core, recording, started_at, app_name);
+}
 
+fn complete(app: &AppHandle, core: &Core, recording: Recording, started_at: i64, app_name: Option<String>) {
     if recording.duration_ms < MIN_MS || recording.peak_rms < MIN_PEAK_RMS {
         log::info!("ignored: {} ms, peak {:.4}", recording.duration_ms, recording.peak_rms);
         mascot::swallow(app);
@@ -190,6 +194,31 @@ fn finish(app: &AppHandle, core: &Core) {
         log::error!("store: {e:#}");
     }
     let _ = app.emit("history://changed", ());
+}
+
+/// Debug/QA: plays a 16 kHz mono WAV through the whole pipeline as if the user
+/// had held the key and spoken it (mascot, transcription, paste, history).
+pub fn simulate(app: &AppHandle, wav: &std::path::Path) -> anyhow::Result<()> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    let mut reader = hound::WavReader::open(wav)?;
+    let samples: Vec<f32> = match reader.spec().sample_format {
+        hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<_, _>>()?,
+        hound::SampleFormat::Int => reader.samples::<i16>().map(|s| s.map(|v| v as f32 / 32768.0)).collect::<Result<_, _>>()?,
+    };
+    let started_at = now_ms();
+    let app_name = paste::frontmost_app();
+    mascot::show(app);
+    let chunk = 16_000 / 30;
+    let mut peak = 0f32;
+    for c in samples.chunks(chunk) {
+        let rms = (c.iter().map(|s| s * s).sum::<f32>() / c.len() as f32).sqrt();
+        peak = peak.max(rms);
+        mascot::set_level(app, (rms * 12.0).min(1.0));
+        std::thread::sleep(Duration::from_millis(33));
+    }
+    let duration_ms = samples.len() as i64 * 1000 / 16_000;
+    complete(app, &core, Recording { samples, duration_ms, peak_rms: peak }, started_at, app_name);
+    Ok(())
 }
 
 /// The user's language setting wins; with "auto" we guess from the text.

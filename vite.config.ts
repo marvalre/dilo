@@ -1,6 +1,5 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { resolve } from "node:path";
 
 export default defineConfig({
   plugins: [react()],
@@ -10,8 +9,8 @@ export default defineConfig({
     target: "safari15",
     rollupOptions: {
       input: {
-        index: resolve(__dirname, "index.html"),
-        mascot: resolve(__dirname, "mascot.html"),
+        index: decodeURIComponent(new URL("./index.html", import.meta.url).pathname),
+        mascot: decodeURIComponent(new URL("./mascot.html", import.meta.url).pathname),
       },
     },
   },
