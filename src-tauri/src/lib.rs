@@ -17,6 +17,8 @@ use coordinator::Core;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const PANEL: &str = "panel";
+/// Passed by the login item so Dicta starts quietly in the menu bar.
+const HIDDEN_FLAG: &str = "--hidden";
 
 /// Opens (or focuses) the panel. The window is destroyed on close to free RAM.
 pub fn open_panel(app: &AppHandle, tab: Option<&str>) {
@@ -68,7 +70,7 @@ pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,ort=warn,enigo=warn,transcribe_rs=warn")).init();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec![HIDDEN_FLAG])))
         .invoke_handler(tauri::generate_handler![
             commands::get_history,
             commands::update_dictation,
@@ -122,17 +124,22 @@ pub fn run() {
             let needs_setup = !models::is_ready(&core.model_dir())
                 || !hotkey::has_accessibility()
                 || !permissions::microphone_granted();
+            let hidden = std::env::args().any(|a| a == HIDDEN_FLAG);
             if needs_setup {
                 open_panel(app.handle(), Some("settings"));
+            } else if !hidden {
+                open_panel(app.handle(), Some("home"));
             }
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building Dicta")
-        .run(|_app, event| {
-            // Keep running in the tray when the panel closes.
-            if let tauri::RunEvent::ExitRequested { api, code: None, .. } = event {
-                api.prevent_exit();
-            }
+        .run(|app, event| match event {
+            // Keep running in the tray when the window closes.
+            tauri::RunEvent::ExitRequested { api, code: None, .. } => api.prevent_exit(),
+            // Opening Dicta again (Finder, Spotlight, Dock) shows the window.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => open_panel(app, None),
+            _ => {}
         });
 }
