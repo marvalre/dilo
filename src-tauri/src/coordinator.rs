@@ -45,7 +45,8 @@ impl Core {
     pub fn new(data_dir: PathBuf) -> anyhow::Result<Arc<Self>> {
         let settings = Settings::load(&data_dir);
         let store = Store::open(&data_dir.join("dicta.db"))?;
-        let engine = Engine::new(models::model_dir(&data_dir));
+        let exe = std::env::current_exe()?;
+        let engine = Engine::new(models::model_dir(&data_dir), exe);
         Ok(Arc::new(Self {
             data_dir,
             store,
@@ -207,6 +208,8 @@ pub fn simulate(app: &AppHandle, wav: &std::path::Path) -> anyhow::Result<()> {
     };
     let started_at = now_ms();
     let app_name = paste::frontmost_app();
+    let engine = core.engine.clone();
+    std::thread::spawn(move || engine.preload());
     mascot::show(app);
     let chunk = 16_000 / 30;
     let mut peak = 0f32;

@@ -1,7 +1,7 @@
 //! Real-model test. Needs the Parakeet model downloaded (run the app once, or see README).
 //! Run with: cargo test --release --test engine_real -- --ignored --nocapture
 
-use dicta_lib::{engine::Engine, models};
+use dicta_lib::{engine::{Engine, LocalModel}, models};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -20,9 +20,8 @@ fn read_wav(name: &str) -> Vec<f32> {
 #[test]
 #[ignore]
 fn transcribes_spanish_and_english() {
-    let engine = Engine::new(model_dir());
+    let mut engine = LocalModel::load(&model_dir()).unwrap();
     let t = Instant::now();
-    engine.preload().unwrap();
     println!("load: {:?}", t.elapsed());
 
     for (file, must_contain) in [("es.wav", "prueba"), ("en.wav", "report")] {
@@ -32,4 +31,28 @@ fn transcribes_spanish_and_english() {
         println!("{file} ({:.1}s audio) in {:?}: {text}", samples.len() as f32 / 16000.0, t.elapsed());
         assert!(text.to_lowercase().contains(must_contain), "{text}");
     }
+}
+
+fn rss_mb() -> u64 {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().parse::<u64>().unwrap() / 1024
+}
+
+#[test]
+#[ignore]
+fn worker_process_transcribes_and_stops() {
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_dicta"));
+    let engine = Engine::new(model_dir(), exe);
+    let t = Instant::now();
+    engine.preload().unwrap();
+    println!("worker ready in {:?}, app RSS {} MB", t.elapsed(), rss_mb());
+    let t = Instant::now();
+    let text = engine.transcribe(&read_wav("es.wav")).unwrap();
+    println!("worker transcribed in {:?}: {text}", t.elapsed());
+    assert!(text.to_lowercase().contains("prueba"));
+    assert!(engine.unload_if_idle(std::time::Duration::ZERO));
+    assert!(!engine.is_loaded());
 }

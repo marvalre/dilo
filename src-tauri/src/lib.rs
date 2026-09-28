@@ -51,7 +51,7 @@ pub fn open_panel(app: &AppHandle, tab: Option<&str>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,ort=warn")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,ort=warn,enigo=warn,transcribe_rs=warn")).init();
 
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![

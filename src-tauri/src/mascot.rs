@@ -42,9 +42,12 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn cursor() -> Option<(f64, f64)> {
-    let enigo = Enigo::new(&Settings::default()).ok()?;
+fn cursor_with(enigo: &Enigo) -> Option<(f64, f64)> {
     enigo.location().ok().map(|(x, y)| (x as f64, y as f64))
+}
+
+fn cursor() -> Option<(f64, f64)> {
+    cursor_with(&Enigo::new(&Settings::default()).ok()?)
 }
 
 /// Top-left window position for a cursor, flipped away from screen edges.
@@ -95,9 +98,10 @@ pub fn show(app: &AppHandle) {
     }
     let (app, visible, generation) = (app.clone(), state.visible.clone(), state.generation.clone());
     std::thread::spawn(move || {
+        let Ok(enigo) = Enigo::new(&Settings::default()) else { return };
         let mut pos: Option<(f64, f64)> = None;
         while visible.load(Ordering::SeqCst) && generation.load(Ordering::SeqCst) >= gen {
-            if let Some((cx, cy)) = cursor() {
+            if let Some((cx, cy)) = cursor_with(&enigo) {
                 let (tx, ty) = target_for(&app, cx, cy);
                 let (x, y) = match pos {
                     Some((px, py)) => (px + (tx - px) * FOLLOW, py + (ty - py) * FOLLOW),

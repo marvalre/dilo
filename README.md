@@ -30,10 +30,13 @@ Medido en un MacBook con Apple M5:
 
 | | |
 |---|---|
-| Cargar el modelo | ~0,56 s (ocurre mientras hablas) |
-| Transcribir 5,5 s de audio | ~0,19 s |
+| Arrancar el motor | ~0,9 s (ocurre mientras hablas, no lo notas) |
+| Transcribir 4–5,5 s de audio | ~0,17–0,23 s |
+| RAM de la app en reposo | ~85–95 MB |
+| RAM del motor mientras está activo | ~1,3 GB (proceso aparte) |
 
-Para ahorrar RAM, el modelo se libera de la memoria tras 10 minutos sin uso (configurable).
+El motor corre en un proceso separado que se cierra tras 5 minutos sin uso (configurable),
+así que esa memoria vuelve completa al sistema. Mientras no dictas, Dicta ocupa menos de 100 MB.
 
 ## Permisos en Mac
 

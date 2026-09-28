@@ -25,7 +25,7 @@ impl Default for Settings {
         Self {
             hotkey: default_hotkey().into(),
             language: "auto".into(),
-            idle_unload_min: 10,
+            idle_unload_min: 5,
             mascot_enabled: true,
             mic: None,
         }
@@ -74,6 +74,6 @@ mod tests {
         std::fs::write(dir.path().join(FILE), r#"{"language":"en"}"#).unwrap();
         let s = Settings::load(dir.path());
         assert_eq!(s.language, "en");
-        assert_eq!(s.idle_unload_min, 10);
+        assert_eq!(s.idle_unload_min, 5);
     }
 }

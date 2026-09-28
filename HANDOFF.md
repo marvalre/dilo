@@ -85,8 +85,12 @@ Mascot preview in a normal browser (no Tauri needed — it runs a demo cycling a
 
 ## 5. Measured so far (Apple M5, macOS 26.6)
 
-- Model load: ~0.56 s. Transcription: 5.5 s Spanish audio in ~0.19 s; 4.0 s English in ~0.13 s.
-- Output quality: perfect on fixtures, adds punctuation, writes numbers as digits ("a las 5").
+- Transcription: 5.5 s Spanish audio in ~0.17–0.19 s; 4.0 s English in ~0.13–0.23 s. Perfect text on fixtures (punctuation, "a las 5").
+- **Engine runs in a WORKER PROCESS** (`dicta --engine-worker <model_dir>`, see engine.rs header for the stdin/stdout protocol).
+  Why: freeing the model in-process left ~500 MB retained by the allocator. Killing the worker returns 100%.
+- App process RSS: ~85 MB idle, ~93 MB during use. Worker RSS while alive: ~1.37 GB. Worker starts in ~0.9 s (started on key press, so it loads while the user talks) and is killed after `idle_unload_min` (default 5).
+- Idea to cut worker RAM (~1.37 GB): Handy now ships a GGUF Q4_K_M Parakeet (485 MB) run via `transcribe-cpp` (ggml, mmap). Switching the worker to that could roughly halve RAM. ORT session options are not exposed by transcribe-rs 0.3.11 (session.rs uses Level3 + defaults).
+- E2E verified with `DICTA_SIMULATE_WAV=<16k wav> Dicta.app/Contents/MacOS/dicta`: mascot shows, text transcribed, pasted into the frontmost app, row saved in dicta.db. NOTE: it pastes into whatever app is frontmost — beware when testing.
 
 ## 6. macOS permissions (the #1 source of "it doesn't work")
 
@@ -107,10 +111,11 @@ Done:
 - [x] App icon + tray icon (provisional mascot face)
 
 In progress / next:
-- [ ] Panel UI (src/panel) — built by a sub-agent; verify `bun run build` passes and that App.tsx reads the initial tab from `location.hash` (#history / #stats / #settings) because Rust opens `index.html#settings`.
-- [ ] End-to-end manual test on Mac: hold Fn in TextEdit, speak, release → text pasted. Needs Accessibility granted by the human.
-- [ ] Measure RAM (Activity Monitor or `ps -o rss= -p <pid>`) idle vs with model loaded; put numbers in README.
-- [ ] README.md (es + en), LICENSE (MIT), credits.
+- [x] Panel UI (src/panel), builds; reads initial tab from location.hash.
+- [x] Engine moved to worker process (RAM), measured, README updated. LICENSE (MIT), README with credits.
+- [x] E2E via DICTA_SIMULATE_WAV (transcribe → paste → history) works in the release bundle.
+- [ ] **Human test**: open Dicta.app, grant Accessibility + Microphone, set 🌐 key to "Do nothing", hold Fn in TextEdit, speak, release. (Real mic + real Fn not yet tested by a human.)
+- [ ] Visual check of the panel inside the real app (it was checked in a browser with mocked data only).
 - [ ] Windows/Linux: paste quirks (see Handy `src-tauri/src/paste_tx/windows.rs`), enigo cursor coordinates are physical pixels on Windows (mascot.rs assumes logical points), tray icon behavior.
 - [ ] Launch at login (tauri-plugin-autostart), auto-update, signing/notarization.
 - [ ] Final name + logo (owner decides).
