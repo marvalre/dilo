@@ -5,28 +5,36 @@ const dayMonthFmt = new Intl.DateTimeFormat("es", { day: "numeric", month: "shor
 const fullDateFmt = new Intl.DateTimeFormat("es", { day: "numeric", month: "short", year: "numeric" });
 const langNames = new Intl.DisplayNames(["es"], { type: "language" });
 
-export const fmtNum = (n: number) => nf.format(Math.round(n));
+const finite = (n: number) => (Number.isFinite(n) ? n : 0);
+
+export const fmtNum = (n: number) => nf.format(Math.round(finite(n)) || 0);
 
 export function fmtDuration(ms: number): string {
-  const s = ms / 1000;
-  if (s < 60) return `${nf1.format(s)} s`;
-  const m = Math.floor(s / 60);
-  return `${m} min ${Math.round(s % 60)} s`;
+  const v = Math.max(0, finite(ms));
+  const tenths = Math.round(v / 100);
+  if (tenths < 600) return `${nf1.format(tenths / 10)} s`;
+  const secs = Math.round(v / 1000);
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return s ? `${fmtNum(m)} min ${s} s` : `${fmtNum(m)} min`;
 }
 
 export function fmtMinutes(min: number): string {
-  const total = Math.round(min);
+  const total = Math.max(0, Math.round(finite(min)));
   if (total < 60) return `${total} min`;
   const h = Math.floor(total / 60);
   const m = total % 60;
-  return m ? `${h} h ${m} min` : `${h} h`;
+  return m ? `${fmtNum(h)} h ${m} min` : `${fmtNum(h)} h`;
 }
 
-export const fmtDayMonth = (d: Date) => dayMonthFmt.format(d).replace(/\.$/, "").replace("sept", "sep");
+const validDate = (d: Date) => Number.isFinite(d.getTime());
+
+export const fmtDayMonth = (d: Date) => (validDate(d) ? dayMonthFmt.format(d).replace(/\.$/, "").replace("sept", "sep") : "");
 
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 
 export function fmtRelative(ts: number, now = Date.now()): string {
+  if (!validDate(new Date(ts))) return "";
   const diffMin = Math.floor((now - ts) / 60000);
   if (diffMin < 1) return "ahora";
   if (diffMin < 60) return `hace ${diffMin} min`;
@@ -67,7 +75,7 @@ export const errMsg = (e: unknown) => (typeof e === "string" ? e : e instanceof 
 const weekdayFmt = new Intl.DateTimeFormat("es", { weekday: "long", day: "numeric", month: "short" });
 const weekdayYearFmt = new Intl.DateTimeFormat("es", { weekday: "long", day: "numeric", month: "short", year: "numeric" });
 
-export const fmtTime = (ts: number) => timeFmt.format(new Date(ts));
+export const fmtTime = (ts: number) => (validDate(new Date(ts)) ? timeFmt.format(new Date(ts)) : "");
 
 /** Local-day key "YYYY-MM-DD" for a timestamp. */
 export function dayKey(ts: number): string {
@@ -80,6 +88,7 @@ export function dayKey(ts: number): string {
 export function fmtDayHeader(ts: number, now = Date.now()): string {
   const d = new Date(ts);
   const n = new Date(now);
+  if (!validDate(d)) return "";
   const day = startOfDay(d);
   if (day === startOfDay(n)) return "Hoy";
   if (day === new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1).getTime()) return "Ayer";
@@ -99,13 +108,14 @@ export function startOfWeek(now = Date.now()): number {
 const mbFmt = new Intl.NumberFormat("es", { maximumFractionDigits: 1 });
 
 /** "670 MB", "1,2 MB", "340 KB", "1,4 GB". */
-export function fmtBytes(b: number): string {
+export function fmtBytes(bytes: number): string {
+  const b = Math.max(0, Math.round(finite(bytes)));
   if (b < 1_000) return `${b} B`;
-  if (b < 1_000_000) return `${Math.round(b / 1_000)} KB`;
-  if (b < 1_000_000_000) {
-    const mb = b / 1_000_000;
-    return `${mb < 10 ? mbFmt.format(mb) : fmtNum(mb)} MB`;
-  }
+  const kb = Math.round(b / 1_000);
+  if (kb < 1_000) return `${kb} KB`;
+  const mb = b / 1_000_000;
+  const mbR = mb < 10 ? Math.round(mb * 10) / 10 : Math.round(mb);
+  if (mbR < 1_000) return `${mbR < 10 ? mbFmt.format(mbR) : fmtNum(mbR)} MB`;
   return `${mbFmt.format(b / 1_000_000_000)} GB`;
 }
 

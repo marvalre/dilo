@@ -92,25 +92,36 @@ pub fn get_settings(core: Core_) -> Settings {
 #[tauri::command]
 pub fn save_settings(app: AppHandle, core: Core_, settings: Settings) -> Result<(), String> {
     hotkey::validate(&settings.hotkey).map_err(|e| format!("Tecla no válida: {e}"))?;
-    let settings = settings.sanitized();
-    let old = core.settings.read().unwrap().clone();
-    settings.save(&core.data_dir).map_err(err)?;
-    if settings.hotkey != old.hotkey {
-        if let Some(h) = core.hotkey.lock().unwrap().as_ref() {
-            h.set(&settings.hotkey);
-        }
-    }
-    if settings.launch_at_login != old.launch_at_login {
+    update_settings(&app, &core, |s| *s = settings)
+}
+
+/// The one place settings change: holds the lock for the whole update so the
+/// panel and the tray can't overwrite each other, then persists and notifies.
+pub fn update_settings(app: &AppHandle, core: &Core, change: impl FnOnce(&mut Settings)) -> Result<(), String> {
+    let mut guard = core.settings.write().unwrap();
+    let old = guard.clone();
+    let mut next = old.clone();
+    change(&mut next);
+    let mut next = next.sanitized();
+    if next.launch_at_login != old.launch_at_login {
         use tauri_plugin_autostart::ManagerExt;
         let al = app.autolaunch();
-        let r = if settings.launch_at_login { al.enable() } else { al.disable() };
+        let r = if next.launch_at_login { al.enable() } else { al.disable() };
         if let Err(e) = r {
             log::error!("autostart: {e}");
+            next.launch_at_login = old.launch_at_login;
         }
     }
-    *core.settings.write().unwrap() = settings.clone();
-    let _ = app.emit("settings://changed", &settings);
-    crate::tray::refresh(&app);
+    next.save(&core.data_dir).map_err(err)?;
+    if next.hotkey != old.hotkey {
+        if let Some(h) = core.hotkey.lock().unwrap().as_ref() {
+            h.set(&next.hotkey);
+        }
+    }
+    *guard = next.clone();
+    drop(guard);
+    let _ = app.emit("settings://changed", &next);
+    crate::tray::refresh(app);
     Ok(())
 }
 
@@ -119,11 +130,18 @@ pub fn save_settings(app: AppHandle, core: Core_, settings: Settings) -> Result<
 pub async fn capture_hotkey(core: State<'_, Arc<Core>>) -> Result<Option<String>, String> {
     use std::sync::atomic::Ordering;
     let core = core.inner().clone();
-    core.capturing.store(true, Ordering::SeqCst);
-    let result = tauri::async_runtime::spawn_blocking(|| hotkey::capture(std::time::Duration::from_secs(10)))
-        .await
-        .map_err(err)
-        .and_then(|r| r.map_err(err));
+    if core.capturing.swap(true, Ordering::SeqCst) {
+        return Err("Ya estoy esperando una tecla".into());
+    }
+    let result = tauri::async_runtime::spawn_blocking(|| {
+        let r = hotkey::capture(std::time::Duration::from_secs(10));
+        // Let the keys come back up before dictation listens again.
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        r
+    })
+    .await
+    .map_err(err)
+    .and_then(|r| r.map_err(err));
     core.capturing.store(false, Ordering::SeqCst);
     result
 }

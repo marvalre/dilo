@@ -1,5 +1,5 @@
 // Small native-looking building blocks shared by the sections.
-import { useEffect, useLayoutEffect, useRef, type ReactNode, type TextareaHTMLAttributes } from "react";
+import { Component, useEffect, useLayoutEffect, useRef, type ErrorInfo, type ReactNode, type TextareaHTMLAttributes } from "react";
 import { ChevronDownIcon } from "./icons";
 
 export function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
@@ -129,13 +129,17 @@ export function ConfirmDialog({
 }) {
   const confirmBtn = useRef<HTMLButtonElement>(null);
   const cancelBtn = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef(onCancel);
+  cancelRef.current = onCancel;
+  const destructiveRef = useRef(destructive);
+  destructiveRef.current = destructive;
   useEffect(() => {
     // Destructive actions default to the safe button.
-    (destructive ? cancelBtn : confirmBtn).current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onCancel();
+    (destructiveRef.current ? cancelBtn : confirmBtn).current?.focus();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && cancelRef.current();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel, destructive]);
+  }, []);
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
       <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="dlg-title">
@@ -156,14 +160,54 @@ export function ConfirmDialog({
   );
 }
 
-export function Toast({ message, onDone }: { message: string; onDone: () => void }) {
+export function Toast({
+  message,
+  onDone,
+  action,
+  duration = 2600,
+}: {
+  message: string;
+  onDone: () => void;
+  action?: { label: string; onClick: () => void };
+  duration?: number;
+}) {
+  const doneRef = useRef(onDone);
+  doneRef.current = onDone;
+  const durationRef = useRef(duration);
+  durationRef.current = duration;
   useEffect(() => {
-    const t = window.setTimeout(onDone, 2600);
+    const t = window.setTimeout(() => doneRef.current(), durationRef.current);
     return () => window.clearTimeout(t);
-  }, [message, onDone]);
+  }, [message]);
   return (
-    <div className="toast" role="status">
+    <div className={action ? "toast toast-has-action" : "toast"} role="status">
       {message}
+      {action && (
+        <button type="button" className="toast-action" onClick={action.onClick}>
+          {action.label}
+        </button>
+      )}
     </div>
   );
+}
+
+export class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error(error, info.componentStack);
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="empty small-empty" role="alert">
+        <p className="empty-title">Algo salió mal en esta sección</p>
+        <button className="btn" onClick={() => this.setState({ error: null })}>
+          Reintentar
+        </button>
+      </div>
+    );
+  }
 }

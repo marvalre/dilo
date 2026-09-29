@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Dicta",
+  "productName": "Dilo",
   "version": "0.1.0",
-  "identifier": "com.dicta.app",
+  "identifier": "com.dilo.app",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -12,12 +12,26 @@
   "app": {
     "macOSPrivateApi": true,
     "windows": [],
-    "security": { "csp": null }
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+    }
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.png", "icons/icon.icns"],
-    "macOS": { "minimumSystemVersion": "13.0", "infoPlist": "Info.plist" }
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.png",
+      "icons/icon.icns"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "infoPlist": "Info.plist",
+      "entitlements": "Entitlements.plist"
+    }
   }
 }

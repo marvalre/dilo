@@ -1,4 +1,4 @@
-/* Dicta — app window. Native macOS look: sidebar + content, SF system font, hairlines. */
+/* Dilo — app window. Native macOS look: sidebar + content, SF system font, hairlines. */
 
 :root {
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, sans-serif;
@@ -179,8 +179,8 @@ p {
 .brand-mascot {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 28px;
+  min-width: 32px;
+  height: 30px;
 }
 
 .brand-name {
@@ -772,6 +772,21 @@ textarea.field {
 .progress-inline {
   width: 140px;
   margin: 0;
+}
+
+.progress.indeterminate .progress-fill {
+  width: 35%;
+  transition: none;
+  animation: progress-slide 1.2s var(--ease) infinite;
+}
+
+@keyframes progress-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(290%);
+  }
 }
 
 /* Chart */
@@ -1384,6 +1399,28 @@ textarea.field {
   animation: toast-in 200ms var(--ease);
   -webkit-user-select: none;
   user-select: none;
+}
+
+.toast-has-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-right: 8px;
+}
+
+.toast-action {
+  border: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.toast-action:hover {
+  background: var(--fill-3);
 }
 
 @keyframes toast-in {

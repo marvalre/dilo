@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "dicta-mascot-demo",
+      "name": "dilo-mascot-demo",
       "runtimeExecutable": "bunx",
       "runtimeArgs": ["vite", "--port", "1431", "--strictPort"],
       "port": 1431

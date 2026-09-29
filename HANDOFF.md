@@ -1,4 +1,4 @@
-# HANDOFF — Dicta (open-source dictation app)
+# HANDOFF — Dilo (open-source dictation app)
 
 > Written for the next AI model (GPT-6, Luna, Sol, Astra…) or human picking this up.
 > Read this whole file before touching anything. Everything you need is here.
@@ -13,7 +13,7 @@ Our twist: a **cute mascot ("el monito")** — a small cream ball with two dot e
 **mouth is the live sound wave of your voice** — floats next to the mouse while you talk and
 **swallows itself** (implodes) when done. Plus a tray app with **History**, **Stats**, **Settings**.
 
-- Name "Dicta" is **provisional** (owner will decide later — rename with search/replace).
+- Name "Dilo" is **provisional** (owner will decide later — rename with search/replace).
 - Runs 100% locally (no cloud, free). Engine: NVIDIA **Parakeet TDT 0.6B v3** (int8 ONNX).
 - Cross-platform goal: macOS first (done/being tested), then Windows, Linux.
 
@@ -27,7 +27,7 @@ Our twist: a **cute mascot ("el monito")** — a small cream ball with two dot e
 | RAM | Model loaded lazily (preloaded on key press) and unloaded after N idle minutes (default 10). |
 | Mascot | Only waves as mouth (no live text). Design in spec §4. |
 | Paste | clipboard save → set → Cmd/Ctrl+V → restore after 300 ms |
-| Storage | SQLite `dicta.db` in app data dir |
+| Storage | SQLite `dilo.db` in app data dir |
 
 Spec: `docs/superpowers/specs/2026-09-28-dicta-design.md`
 Plan: `docs/superpowers/plans/2026-09-28-dicta-v1.md`
@@ -55,7 +55,7 @@ re-grant Accessibility after every build (symptom: log says "Accessibility permi
 ## 3. Where things are
 
 ```
-dicta/
+dilo/
   HANDOFF.md                  ← this file (keep it updated!)
   docs/superpowers/specs|plans
   index.html / mascot.html    ← two Vite entry pages
@@ -78,7 +78,7 @@ dicta/
     tests/fixtures/{es,en}.wav
 ```
 
-Model files live in `~/Library/Application Support/com.dicta.app/models/parakeet-tdt-0.6b-v3-int8/`
+Model files live in `~/Library/Application Support/com.dilo.app/models/parakeet-tdt-0.6b-v3-int8/`
 (4 files from https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx). Already downloaded on Marcelo's Mac.
 
 ## 4. How to build / test / run
@@ -86,7 +86,7 @@ Model files live in `~/Library/Application Support/com.dicta.app/models/parakeet
 Rust is installed via rustup at `~/.cargo/bin` (NOT on PATH in some shells → call `~/.cargo/bin/cargo`).
 
 ```bash
-cd "/Users/marcelo/M Visuals/CC Claude Code/dicta"
+cd dilo
 bun install
 # unit tests (fast)
 cd src-tauri && ~/.cargo/bin/cargo test --lib
@@ -96,7 +96,7 @@ cd src-tauri && ~/.cargo/bin/cargo test --lib
 cd .. && bun run build
 # run app in dev (hot reload for the webviews)
 PATH="$HOME/.cargo/bin:$PATH" bun tauri dev
-# release bundle → src-tauri/target/release/bundle/macos/Dicta.app
+# release bundle → src-tauri/target/release/bundle/macos/Dilo.app
 PATH="$HOME/.cargo/bin:$PATH" bun tauri build --bundles app
 ```
 
@@ -106,11 +106,11 @@ Mascot preview in a normal browser (no Tauri needed — it runs a demo cycling a
 ## 5. Measured so far (Apple M5, macOS 26.6)
 
 - Transcription: 5.5 s Spanish audio in ~0.17–0.19 s; 4.0 s English in ~0.13–0.23 s. Perfect text on fixtures (punctuation, "a las 5").
-- **Engine runs in a WORKER PROCESS** (`dicta --engine-worker <model_dir>`, see engine.rs header for the stdin/stdout protocol).
+- **Engine runs in a WORKER PROCESS** (`dilo --engine-worker <model_dir>`, see engine.rs header for the stdin/stdout protocol).
   Why: freeing the model in-process left ~500 MB retained by the allocator. Killing the worker returns 100%.
 - App process RSS: ~85 MB idle, ~93 MB during use. Worker RSS while alive: ~1.37 GB. Worker starts in ~0.9 s (started on key press, so it loads while the user talks) and is killed after `idle_unload_min` (default 5).
 - Idea to cut worker RAM (~1.37 GB): Handy now ships a GGUF Q4_K_M Parakeet (485 MB) run via `transcribe-cpp` (ggml, mmap). Switching the worker to that could roughly halve RAM. ORT session options are not exposed by transcribe-rs 0.3.11 (session.rs uses Level3 + defaults).
-- E2E verified with `DICTA_SIMULATE_WAV=<16k wav> Dicta.app/Contents/MacOS/dicta`: mascot shows, text transcribed, pasted into the frontmost app, row saved in dicta.db. NOTE: it pastes into whatever app is frontmost — beware when testing.
+- E2E verified with `DILO_SIMULATE_WAV=<16k wav> Dilo.app/Contents/MacOS/dilo`: mascot shows, text transcribed, pasted into the frontmost app, row saved in dilo.db. NOTE: it pastes into whatever app is frontmost — beware when testing.
 
 ## 6. macOS permissions (the #1 source of "it doesn't work")
 
@@ -119,7 +119,7 @@ The app needs:
 2. **Microphone** — system prompts on first recording.
 3. **Fn key:** macOS may use Fn/🌐 for emoji picker or its own dictation. Tell the user: System Settings → Keyboard → "Press 🌐 key to" → **Do Nothing**.
 
-Every rebuild of an unsigned binary can invalidate the Accessibility grant — if the hotkey stops working after a rebuild, remove Dicta from the Accessibility list and add it again.
+Every rebuild of an unsigned binary can invalidate the Accessibility grant — if the hotkey stops working after a rebuild, remove Dilo from the Accessibility list and add it again.
 An AI agent must NOT change system security settings itself; ask the human.
 
 ## 7. Status / TODO (update this list as you go)
@@ -133,8 +133,8 @@ Done:
 In progress / next:
 - [x] Panel UI (src/panel), builds; reads initial tab from location.hash.
 - [x] Engine moved to worker process (RAM), measured, README updated. LICENSE (MIT), README with credits.
-- [x] E2E via DICTA_SIMULATE_WAV (transcribe → paste → history) works in the release bundle.
-- [ ] **Human test**: open Dicta.app, grant Accessibility + Microphone, set 🌐 key to "Do nothing", hold Fn in TextEdit, speak, release. (Real mic + real Fn not yet tested by a human.)
+- [x] E2E via DILO_SIMULATE_WAV (transcribe → paste → history) works in the release bundle.
+- [ ] **Human test**: open Dilo.app, grant Accessibility + Microphone, set 🌐 key to "Do nothing", hold Fn in TextEdit, speak, release. (Real mic + real Fn not yet tested by a human.)
 - [ ] Visual check of the panel inside the real app (it was checked in a browser with mocked data only).
 - [ ] Windows/Linux: paste quirks (see Handy `src-tauri/src/paste_tx/windows.rs`), enigo cursor coordinates are physical pixels on Windows (mascot.rs assumes logical points), tray icon behavior.
 - [ ] Launch at login (tauri-plugin-autostart), auto-update, signing/notarization.

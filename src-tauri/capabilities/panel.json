@@ -1,0 +1,30 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "panel",
+  "description": "The app window: every command.",
+  "windows": [
+    "panel"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-get-history",
+    "allow-update-dictation",
+    "allow-clear-history",
+    "allow-storage-info",
+    "allow-capture-hotkey",
+    "allow-list-rules",
+    "allow-save-rule",
+    "allow-delete-rule",
+    "allow-delete-dictation",
+    "allow-get-stats",
+    "allow-get-settings",
+    "allow-save-settings",
+    "allow-list-microphones",
+    "allow-model-status",
+    "allow-download-model",
+    "allow-copy-text",
+    "allow-permissions",
+    "allow-open-accessibility-settings",
+    "allow-open-microphone-settings"
+  ]
+}

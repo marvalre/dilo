@@ -12,8 +12,9 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use std::io::{BufRead, BufReader, Read, Write};
+use std::sync::mpsc;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use transcribe_rs::onnx::parakeet::{ParakeetModel, ParakeetParams, TimestampGranularity};
@@ -111,19 +112,54 @@ fn read_samples(r: &mut impl Read) -> std::io::Result<Vec<f32>> {
     Ok(bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect())
 }
 
+/// Longest time to wait for the model to load.
+const LOAD_TIMEOUT: Duration = Duration::from_secs(90);
+
 struct Worker {
     child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    /// Audio to send, written on a helper thread: a stuck worker stops reading
+    /// its stdin and a blocking write would never return.
+    audio: mpsc::Sender<Vec<f32>>,
+    /// Lines from the worker's stdout, read on a helper thread so waits can time out.
+    lines: mpsc::Receiver<String>,
 }
 
 impl Worker {
-    fn read_line(&mut self) -> Result<String> {
-        let mut line = String::new();
-        if self.stdout.read_line(&mut line)? == 0 {
-            bail!("engine worker exited");
+    fn spawn(mut child: Child) -> Self {
+        let mut stdin = child.stdin.take().unwrap();
+        let (audio, audio_rx) = mpsc::channel::<Vec<f32>>();
+        std::thread::Builder::new()
+            .name("engine-writer".into())
+            .spawn(move || {
+                for samples in audio_rx {
+                    if write_samples(&mut stdin, &samples).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn engine writer");
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let (tx, lines) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("engine-reader".into())
+            .spawn(move || {
+                for line in stdout.lines() {
+                    let Ok(line) = line else { break };
+                    if tx.send(line).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn engine reader");
+        Self { child, audio, lines }
+    }
+
+    fn read_line(&mut self, timeout: Duration) -> Result<String> {
+        match self.lines.recv_timeout(timeout) {
+            Ok(line) => Ok(line),
+            Err(mpsc::RecvTimeoutError::Timeout) => bail!("el motor tardó demasiado (más de {} s)", timeout.as_secs()),
+            Err(mpsc::RecvTimeoutError::Disconnected) => bail!("engine worker exited"),
         }
-        Ok(line.trim_end_matches('\n').to_string())
     }
 }
 
@@ -168,19 +204,15 @@ impl Engine {
             *guard = None; // it died; start a fresh one
         }
         let t = Instant::now();
-        let mut child = Command::new(&self.exe)
+        let child = Command::new(&self.exe)
             .arg(WORKER_FLAG)
             .arg(&self.dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
             .with_context(|| format!("start engine worker {:?}", self.exe))?;
-        let mut w = Worker {
-            stdin: child.stdin.take().unwrap(),
-            stdout: BufReader::new(child.stdout.take().unwrap()),
-            child,
-        };
-        let first = w.read_line()?;
+        let mut w = Worker::spawn(child);
+        let first = w.read_line(LOAD_TIMEOUT)?; // on error `w` drops and the process is killed
         if first != "ready" {
             bail!("engine worker: {}", unescape(first.trim_start_matches("error ")));
         }
@@ -194,14 +226,18 @@ impl Engine {
         let mut guard = self.worker.lock().unwrap();
         self.ensure(&mut guard)?;
         let w = guard.as_mut().unwrap();
-        let result = write_samples(&mut w.stdin, samples)
-            .map_err(anyhow::Error::from)
-            .and_then(|_| w.read_line());
+        // Parakeet runs ~20× faster than real time; allow a generous margin.
+        let timeout = Duration::from_secs(30) + Duration::from_secs_f32(samples.len() as f32 / 16_000.0);
+        let result = w
+            .audio
+            .send(samples.to_vec())
+            .map_err(|_| anyhow!("engine worker exited"))
+            .and_then(|_| w.read_line(timeout));
         *self.last_used.lock().unwrap() = Instant::now();
         let line = match result {
             Ok(l) => l,
             Err(e) => {
-                *guard = None; // broken pipe: restart next time
+                *guard = None; // hung or broken: kill it, restart next time
                 return Err(e);
             }
         };

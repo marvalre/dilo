@@ -6,7 +6,7 @@
 //! Matching is case-insensitive and respects word boundaries. Parakeet cannot be
 //! taught new words, so correcting after transcription is how the dictionary works.
 
-use regex::{Regex, RegexBuilder};
+use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -51,45 +51,81 @@ fn normalize(s: &str) -> String {
         .join(" ")
 }
 
-fn pattern(from: &str) -> Option<Regex> {
-    let from = from.trim();
-    if from.is_empty() {
-        return None;
+/// A trigger spoken alone: words must match ignoring punctuation, but a trigger
+/// made of symbols ("c++", "🙂") must match exactly (ignoring case and edges).
+fn is_whole_utterance(text: &str, trigger: &str) -> bool {
+    let (nt, nr) = (normalize(text), normalize(trigger));
+    if nr.is_empty() {
+        return text.trim().to_lowercase() == trigger.trim().to_lowercase();
     }
-    let starts_word = from.chars().next().is_some_and(char::is_alphanumeric);
-    let ends_word = from.chars().last().is_some_and(char::is_alphanumeric);
-    // Let any run of whitespace in the trigger match any whitespace in the text.
-    let body = from.split_whitespace().map(regex::escape).collect::<Vec<_>>().join(r"\s+");
-    let pat = format!(
-        "{}{}{}",
-        if starts_word { r"\b" } else { "" },
-        body,
-        if ends_word { r"\b" } else { "" }
-    );
-    RegexBuilder::new(&pat).case_insensitive(true).build().ok()
+    let symbolic = trigger.trim().chars().any(|c| !c.is_alphanumeric() && !c.is_whitespace());
+    if symbolic {
+        let strip = |s: &str| s.trim().trim_end_matches(['.', ',', '!', '?', '¡', '¿']).trim().to_lowercase();
+        return strip(text) == strip(trigger);
+    }
+    nt == nr
 }
 
-pub fn apply(text: &str, rules: &[Rule]) -> String {
-    let active: Vec<&Rule> = rules.iter().filter(|r| r.enabled && !r.from.trim().is_empty()).collect();
+fn body(from: &str) -> String {
+    from.split_whitespace().map(regex::escape).collect::<Vec<_>>().join(r"\s+")
+}
 
-    // A shortcut spoken on its own ("Mi correo.") pastes exactly its expansion.
-    let whole = normalize(text);
-    if let Some(r) = active
-        .iter()
-        .find(|r| r.kind == RuleKind::Shortcut && normalize(&r.from) == whole)
-    {
+/// Keeps a leading capital: "Okey, vamos" with okey→ok gives "Ok, vamos".
+fn match_case(matched: &str, to: &str) -> String {
+    let starts_upper = matched.chars().next().is_some_and(char::is_uppercase);
+    let mut chars = to.chars();
+    match chars.next() {
+        Some(c) if starts_upper && c.is_lowercase() => c.to_uppercase().chain(chars).collect(),
+        _ => to.to_string(),
+    }
+}
+
+/// Applies every enabled rule in a single pass, so replaced text is never
+/// rewritten again by another rule. Longest trigger wins where they overlap.
+pub fn apply(text: &str, rules: &[Rule]) -> String {
+    let mut active: Vec<&Rule> = rules.iter().filter(|r| r.enabled && !r.from.trim().is_empty()).collect();
+
+    if let Some(r) = active.iter().find(|r| r.kind == RuleKind::Shortcut && is_whole_utterance(text, &r.from)) {
         return r.to.clone();
     }
 
-    // Longer triggers first so "mi correo del trabajo" wins over "mi correo".
-    let mut ordered = active;
-    ordered.sort_by_key(|r| std::cmp::Reverse(r.from.len()));
-    let mut out = text.to_string();
-    for r in ordered {
-        if let Some(re) = pattern(&r.from) {
-            out = re.replace_all(&out, regex::NoExpand(&r.to)).into_owned();
-        }
+    active.sort_by_key(|r| std::cmp::Reverse(r.from.trim().chars().count()));
+    if active.is_empty() {
+        return text.to_string();
     }
+    let alternation = active.iter().map(|r| format!("({})", body(&r.from))).collect::<Vec<_>>().join("|");
+    let Ok(re) = RegexBuilder::new(&alternation).case_insensitive(true).build() else {
+        return text.to_string();
+    };
+
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    let mut pos = 0;
+    while pos <= text.len() {
+        let Some(caps) = re.captures_at(text, pos) else { break };
+        let m = caps.get(0).unwrap();
+        let idx = (1..caps.len()).find(|&i| caps.get(i).is_some()).unwrap_or(1) - 1;
+        let rule = active[idx];
+        let before = text[..m.start()].chars().next_back();
+        let after = text[m.end()..].chars().next();
+        let first = m.as_str().chars().next();
+        let lastc = m.as_str().chars().next_back();
+        // Whole words only: no word character glued to either edge of the match.
+        let ok_start = !(first.is_some_and(is_word) && before.is_some_and(is_word))
+            && !(first.is_some_and(|c| !is_word(c)) && before.is_some_and(is_word));
+        let ok_end = !(lastc.is_some_and(is_word) && after.is_some_and(is_word));
+        if m.is_empty() || !ok_start || !ok_end {
+            pos = m.start() + text[m.start()..].chars().next().map_or(1, char::len_utf8);
+            continue;
+        }
+        out.push_str(&text[last..m.start()]);
+        let replacement = if rule.kind == RuleKind::Correction { match_case(m.as_str(), &rule.to) } else { rule.to.clone() };
+        out.push_str(&replacement);
+        last = m.end();
+        pos = m.end();
+    }
+    out.push_str(&text[last..]);
     out
 }
 
@@ -131,6 +167,40 @@ mod tests {
             off,
         ];
         assert_eq!(apply("hola, mi correo del trabajo es este", &rules), "hola, b@work.com es este");
+    }
+
+    #[test]
+    fn rules_never_rewrite_each_other() {
+        let rules = vec![
+            rule(RuleKind::Correction, "cloud code", "Claude Code"),
+            rule(RuleKind::Correction, "code", "código"),
+            rule(RuleKind::Shortcut, "mi correo", "ejemplo@gmail.com"),
+            rule(RuleKind::Correction, "gmail", "Gmail"),
+        ];
+        assert_eq!(apply("uso cloud code a diario", &rules), "uso Claude Code a diario");
+        assert_eq!(apply("escribe a mi correo ya", &rules), "escribe a ejemplo@gmail.com ya");
+        assert_eq!(apply("el code y gmail", &rules), "el código y Gmail");
+    }
+
+    #[test]
+    fn symbolic_and_empty_triggers_are_strict() {
+        let rules = vec![rule(RuleKind::Shortcut, "c++", "C plus plus"), rule(RuleKind::Shortcut, "🙂", "sonrisa")];
+        assert_eq!(apply("C.", &rules), "C.");
+        assert_eq!(apply("...", &rules), "...");
+        assert_eq!(apply("c++", &rules), "C plus plus");
+    }
+
+    #[test]
+    fn keeps_leading_capital_and_punctuation_boundaries() {
+        let rules = vec![rule(RuleKind::Correction, "okey", "ok"), rule(RuleKind::Correction, "@marcelo", "@mv")];
+        assert_eq!(apply("Okey, vamos. okey", &rules), "Ok, vamos. ok");
+        assert_eq!(apply("yo@marcelo.com y @marcelo", &rules), "yo@marcelo.com y @mv");
+    }
+
+    #[test]
+    fn accented_words_respect_boundaries() {
+        let rules = vec![rule(RuleKind::Correction, "está", "ESTÁ"), rule(RuleKind::Correction, "niño", "chico")];
+        assert_eq!(apply("Está el niño y los niños estás", &rules), "ESTÁ el chico y los niños estás");
     }
 
     #[test]

@@ -112,7 +112,8 @@ function ModelCard() {
   const m = useModelStatus();
   const [err, setErr] = useState<string | null>(null);
   if (!m || m.ready) return null;
-  const pct = m.total > 0 ? Math.min(100, (m.done / m.total) * 100) : 0;
+  const known = m.total > 0;
+  const pct = known ? Math.min(100, (m.done / m.total) * 100) : 0;
   const error = err ?? m.error;
   const download = () => {
     setErr(null);
@@ -127,16 +128,24 @@ function ModelCard() {
         <h2 className="model-card-title">{m.downloading ? "Descargando el modelo de voz…" : "Descarga el modelo de voz"}</h2>
         {m.downloading ? (
           <>
-            <div className="progress" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
-              <div className="progress-fill" style={{ width: `${pct}%` }} />
+            <div
+              className={known ? "progress" : "progress indeterminate"}
+              role="progressbar"
+              aria-valuenow={known ? Math.round(pct) : undefined}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <div className="progress-fill" style={known ? { width: `${pct}%` } : undefined} />
             </div>
             <p className="model-card-text">
-              {fmtNum(m.done / 1_000_000)} de {m.total > 0 ? fmtNum(m.total / 1_000_000) : "…"} MB · {Math.round(pct)} %
+              {known
+                ? `${fmtNum(m.done / 1_000_000)} de ${fmtNum(m.total / 1_000_000)} MB · ${Math.round(pct)} %`
+                : `${fmtNum(m.done / 1_000_000)} MB descargados`}
             </p>
           </>
         ) : (
           <p className="model-card-text">
-            Dicta transcribe todo en tu Mac, sin enviar tu voz a ningún sitio. Solo necesita descargar el modelo una vez (unos 670 MB).
+            Dilo transcribe todo en tu Mac, sin enviar tu voz a ningún sitio. Solo necesita descargar el modelo una vez (unos 670 MB).
           </p>
         )}
         {error && <p className="error-text">{error}</p>}
@@ -253,7 +262,7 @@ function StorageBar({ s, onClean }: { s: StorageInfo; onClean: () => void }) {
       {over && (
         <div className="storage-warn">
           <WarnIcon />
-          <span>Dicta ocupa más de {fmtBytes(s.warn_bytes)}. Puedes liberar espacio borrando dictados antiguos.</span>
+          <span>Dilo ocupa más de {fmtBytes(s.warn_bytes)}. Puedes liberar espacio borrando dictados antiguos.</span>
           <button className="btn btn-sm" onClick={onClean}>
             Limpiar historial
           </button>

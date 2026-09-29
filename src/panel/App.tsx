@@ -10,6 +10,7 @@ import History from "./History";
 import Dictionary from "./Dictionary";
 import MascotPage from "./MascotPage";
 import SettingsPage from "./SettingsPage";
+import { ErrorBoundary } from "./ui";
 
 export type Section = "home" | "history" | "dictionary" | "mascot" | "settings";
 
@@ -63,11 +64,13 @@ export default function App() {
         </aside>
         <main className="content" ref={contentRef}>
           <div className="content-inner" key={section}>
-            {section === "home" && <Home onNavigate={setSection} />}
-            {section === "history" && <History />}
-            {section === "dictionary" && <Dictionary />}
-            {section === "mascot" && <MascotPage />}
-            {section === "settings" && <SettingsPage />}
+            <ErrorBoundary>
+              {section === "home" && <Home onNavigate={setSection} />}
+              {section === "history" && <History />}
+              {section === "dictionary" && <Dictionary />}
+              {section === "mascot" && <MascotPage />}
+              {section === "settings" && <SettingsPage />}
+            </ErrorBoundary>
           </div>
         </main>
       </div>
@@ -95,7 +98,8 @@ function SidebarBrand() {
       <span className="brand-mascot">
         <MascotFace
           skin={settings?.mascot_skin ?? "glass"}
-          size="m"
+          size="s"
+          scale={0.9}
           mode="listening"
           level={reduced ? 0.25 : frame.level}
           t={reduced ? 0 : frame.t}
@@ -103,7 +107,7 @@ function SidebarBrand() {
           uid="brand"
         />
       </span>
-      <span className="brand-name">Dicta</span>
+      <span className="brand-name">Dilo</span>
     </div>
   );
 }

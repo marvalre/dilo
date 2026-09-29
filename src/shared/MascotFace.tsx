@@ -1,18 +1,19 @@
 // The mascot face, shared by the floating mascot window and the app's skin picker.
 // Pure SVG; animation state (level, blink, mode) is driven by the parent.
 
-export type Skin = "glass" | "jolly" | "dot" | "aura";
+export type Skin = "wave" | "glass" | "jolly" | "dot" | "aura";
 export type MascotSize = "s" | "m" | "l";
 export type Mode = "listening" | "thinking" | "done" | "sad" | "confused";
 
 export const SKINS: { id: Skin; name: string; description: string }[] = [
+  { id: "wave", name: "Wave", description: "Solo la onda de tu voz, sin carita" },
   { id: "glass", name: "Glass", description: "Cristal oscuro, el más Apple" },
   { id: "jolly", name: "Jolly", description: "Carita crema con mejillas" },
   { id: "dot", name: "Dot", description: "Mínimo y discreto" },
   { id: "aura", name: "Aura", description: "Halo que respira con tu voz" },
 ];
 
-export const SIZE_SCALE: Record<MascotSize, number> = { s: 0.8, m: 1, l: 1.3 };
+export const SIZE_SCALE: Record<MascotSize, number> = { s: 1.4, m: 1.8, l: 2.3 };
 
 interface Palette {
   w: number; // viewBox width
@@ -28,10 +29,26 @@ interface Palette {
   barGap: number;
   barMax: number;
   cheeks?: boolean;
+  bars?: number; // bar count (default 5)
+  noFace?: boolean; // waveform only, no eyes
   halo?: boolean;
 }
 
 const PALETTES: Record<Skin, Palette> = {
+  wave: {
+    w: 46, h: 24, ink: "#fff", eyeRx: 0, eyeRy: 0, eyeY: 0, eyeGap: 0, barsY: 12, barW: 2, barGap: 1.3, barMax: 17, bars: 9, noFace: true,
+    body: (id) => (
+      <>
+        <defs>
+          <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#2c2c2e" stopOpacity={0.96} />
+            <stop offset="1" stopColor="#1c1c1e" stopOpacity={0.96} />
+          </linearGradient>
+        </defs>
+        <rect x={1} y={1} width={44} height={22} rx={11} fill={`url(#${id})`} stroke="rgba(255,255,255,.22)" strokeWidth={0.6} />
+      </>
+    ),
+  },
   glass: {
     w: 30, h: 24, ink: "#fff", eyeRx: 1.3, eyeRy: 1.7, eyeY: 9.4, eyeGap: 4, barsY: 15.6, barW: 1.2, barGap: 0.9, barMax: 5,
     body: (id) => (
@@ -61,10 +78,14 @@ const PALETTES: Record<Skin, Palette> = {
 };
 
 const BAR_ENV = [0.55, 0.85, 1, 0.8, 0.5];
+const envFor = (i: number, n: number) => (n === 5 ? BAR_ENV[i] : 0.3 + 0.7 * Math.sin((Math.PI * (i + 0.5)) / n));
 
 /** Height of each mouth bar for a voice level (0..1) at time t (ms). */
-export function barHeights(level: number, t: number, mode: Mode, p: { barW: number; barMax: number }): number[] {
-  return BAR_ENV.map((env, i) => {
+export function barHeights(level: number, t: number, mode: Mode, p: { barW: number; barMax: number; bars?: number; noFace?: boolean }): number[] {
+  const n = p.bars ?? 5;
+  return Array.from({ length: n }, (_, i) => {
+    const env = envFor(i, n);
+    if (mode === "done" && p.noFace) return p.barW + (p.barMax * 0.4 - p.barW) * env;
     if (mode === "thinking") {
       // Gentle travelling "loading" wave.
       const wave = (Math.sin(t / 160 - i * 0.9) + 1) / 2;
@@ -76,9 +97,12 @@ export function barHeights(level: number, t: number, mode: Mode, p: { barW: numb
   });
 }
 
-export function mascotBox(skin: Skin, size: MascotSize): { width: number; height: number } {
-  const p = PALETTES[skin];
-  const s = SIZE_SCALE[size];
+const palette = (skin: string): Palette =>
+  Object.prototype.hasOwnProperty.call(PALETTES, skin) ? PALETTES[skin as Skin] : PALETTES.wave;
+
+export function mascotBox(skin: Skin, size: MascotSize, scale?: number): { width: number; height: number } {
+  const p = palette(skin);
+  const s = scale ?? SIZE_SCALE[size] ?? SIZE_SCALE.m;
   return { width: p.w * s, height: p.h * s };
 }
 
@@ -90,6 +114,7 @@ export function MascotFace({
   t,
   blink,
   uid,
+  scale,
 }: {
   skin: Skin;
   size: MascotSize;
@@ -98,9 +123,10 @@ export function MascotFace({
   t: number;
   blink: boolean;
   uid: string;
+  scale?: number; // overrides `size` (px multiplier)
 }) {
-  const p = PALETTES[skin];
-  const { width, height } = mascotBox(skin, size);
+  const p = palette(skin);
+  const { width, height } = mascotBox(skin, size, scale);
   const cx = p.w / 2;
   const heights = barHeights(level, t, mode, p);
   const total = heights.length * p.barW + (heights.length - 1) * p.barGap;
@@ -132,15 +158,15 @@ export function MascotFace({
         </>
       )}
       <g style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,.28))" }}>{p.body(`${uid}-body`)}</g>
-      {eye(cx - p.eyeGap)}
-      {eye(cx + p.eyeGap)}
+      {!p.noFace && eye(cx - p.eyeGap)}
+      {!p.noFace && eye(cx + p.eyeGap)}
       {p.cheeks && (
         <g fill="#FFB3A7" opacity={0.7}>
           <ellipse cx={cx - 6.4} cy={14.4} rx={1.6} ry={0.9} />
           <ellipse cx={cx + 6.4} cy={14.4} rx={1.6} ry={0.9} />
         </g>
       )}
-      {mode === "done" ? (
+      {mode === "done" && !p.noFace ? (
         <path
           d={`M${cx - 2.2} ${p.barsY - 0.6} Q${cx} ${p.barsY + 1.4} ${cx + 2.2} ${p.barsY - 0.6}`}
           fill="none"
@@ -157,7 +183,7 @@ export function MascotFace({
             width={p.barW}
             height={h}
             rx={p.barW / 2}
-            fill={p.ink}
+            fill={p.noFace && mode === "done" ? "#30D158" : p.ink}
           />
         ))
       )}

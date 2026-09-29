@@ -1,6 +1,6 @@
-# Dicta — Design Spec (2026-09-28)
+# Dilo — Design Spec (2026-09-28)
 
-> Working name "Dicta" is provisional. The final name is TBD; rename with search/replace.
+> Working name "Dilo" is provisional. The final name is TBD; rename with search/replace.
 
 ## 1. What it is
 

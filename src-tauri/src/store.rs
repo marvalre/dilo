@@ -30,6 +30,27 @@ pub struct NewDictation {
     pub error: Option<String>,
 }
 
+/// Lowercase without accents: "Reunión MAÑANA" → "reunion manana".
+pub fn fold(s: &str) -> String {
+    s.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'á' | 'à' | 'ä' | 'â' | 'ã' | 'å' | 'ā' => 'a',
+            'é' | 'è' | 'ë' | 'ê' | 'ē' | 'ę' => 'e',
+            'í' | 'ì' | 'ï' | 'î' | 'ī' => 'i',
+            'ó' | 'ò' | 'ö' | 'ô' | 'õ' | 'ø' | 'ō' => 'o',
+            'ú' | 'ù' | 'ü' | 'û' | 'ū' => 'u',
+            'ñ' | 'ń' => 'n',
+            'ç' | 'ć' | 'č' => 'c',
+            'ý' | 'ÿ' => 'y',
+            'ś' | 'š' => 's',
+            'ź' | 'ż' | 'ž' => 'z',
+            'ł' => 'l',
+            other => other,
+        })
+        .collect()
+}
+
 pub struct Store {
     conn: Mutex<Connection>,
 }
@@ -84,6 +105,12 @@ impl Store {
 
     fn init(conn: Connection) -> Result<Self> {
         conn.execute_batch(SCHEMA)?;
+        conn.create_scalar_function(
+            "fold",
+            1,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8 | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+            |ctx| Ok(fold(&ctx.get::<String>(0)?)),
+        )?;
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -103,15 +130,15 @@ impl Store {
         )?)
     }
 
-    /// Newest first. `query` filters by a case-insensitive substring of the text.
+    /// Newest first. `query` filters by a substring, ignoring case and accents.
     pub fn list(&self, query: Option<&str>, limit: u32, offset: u32) -> Result<Vec<Dictation>> {
         let conn = self.conn.lock().unwrap();
-        let pattern = format!("%{}%", query.unwrap_or("").trim());
+        let needle = fold(query.unwrap_or("").trim());
         let mut stmt = conn.prepare(&format!(
-            "SELECT {COLUMNS} FROM dictations WHERE text LIKE ?1
+            "SELECT {COLUMNS} FROM dictations WHERE ?1 = '' OR instr(fold(text), ?1) > 0
              ORDER BY created_at DESC, id DESC LIMIT ?2 OFFSET ?3"
         ))?;
-        let rows = stmt.query_map(params![pattern, limit, offset], row_to_dictation)?;
+        let rows = stmt.query_map(params![needle, limit, offset], row_to_dictation)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -138,13 +165,19 @@ impl Store {
 
     /// Deletes everything, or only rows created before `before_ms`. Returns rows deleted.
     pub fn clear(&self, before_ms: Option<i64>) -> Result<usize> {
-        let conn = self.conn.lock().unwrap();
-        let n = match before_ms {
-            Some(ms) => conn.execute("DELETE FROM dictations WHERE created_at < ?1", [ms])?,
-            None => conn.execute("DELETE FROM dictations", [])?,
+        let n = {
+            let conn = self.conn.lock().unwrap();
+            match before_ms {
+                Some(ms) => conn.execute("DELETE FROM dictations WHERE created_at < ?1", [ms])?,
+                None => conn.execute("DELETE FROM dictations", [])?,
+            }
         };
-        // Give the space back to the disk.
-        conn.execute_batch("VACUUM")?;
+        // Give the space back to the disk; best effort (needs free space, may be slow).
+        if n > 0 {
+            if let Err(e) = self.conn.lock().unwrap().execute_batch("VACUUM") {
+                log::warn!("vacuum: {e}");
+            }
+        }
         Ok(n)
     }
 
@@ -262,6 +295,11 @@ mod tests {
         s.insert(new("comprar leche", 2_000)).unwrap();
         assert_eq!(s.list(Some("reunión con"), 50, 0).unwrap().len(), 1);
         assert_eq!(s.list(Some("LECHE"), 50, 0).unwrap().len(), 1);
+        assert_eq!(s.list(Some("REUNIÓN"), 50, 0).unwrap().len(), 1);
+        assert_eq!(s.list(Some("reunion con ana"), 50, 0).unwrap().len(), 1);
+        assert_eq!(s.list(Some("_"), 50, 0).unwrap().len(), 0);
+        assert_eq!(s.list(Some("%"), 50, 0).unwrap().len(), 0);
+        assert_eq!(s.list(Some("  "), 50, 0).unwrap().len(), 2);
         s.delete(a.id).unwrap();
         assert!(s.get(a.id).unwrap().is_none());
     }

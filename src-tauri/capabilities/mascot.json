@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "mascot",
+  "description": "The floating mascot: only listens to events and reads its look.",
+  "windows": [
+    "mascot"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-settings"
+  ]
+}

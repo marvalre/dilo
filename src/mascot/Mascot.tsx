@@ -24,7 +24,10 @@ export function Mascot() {
     if (!inTauri) return runDemo(target, setState);
     invoke<Look>("get_settings").then(setLook).catch(() => {});
     const subs = [
-      listen<State>("mascot://state", (e) => setState(e.payload)),
+      listen<State>("mascot://state", (e) => {
+        if (e.payload === "listening") invoke<Look>("get_settings").then(setLook).catch(() => {});
+        setState(e.payload);
+      }),
       listen<number>("mascot://level", (e) => (target.current = e.payload)),
       listen<Look>("settings://changed", (e) => setLook(e.payload)),
     ];

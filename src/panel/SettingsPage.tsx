@@ -42,14 +42,10 @@ export default function SettingsPage() {
 
   if (!settings) return <PageHeader title="Ajustes" />;
 
-  const update = (patch: Partial<Settings>) => {
+  const set = (patch: Partial<Settings>) => {
     setError(null);
-    return save({ ...settings, ...patch }).catch((e) => {
-      setError(errMsg(e));
-      throw e;
-    });
+    save(patch).catch((e) => setError(errMsg(e)));
   };
-  const set = (patch: Partial<Settings>) => void update(patch).catch(() => {});
 
   const micList = settings.mic && !mics.includes(settings.mic) ? [settings.mic, ...mics] : mics;
 
@@ -66,8 +62,8 @@ export default function SettingsPage() {
           </>
         }
       >
-        <HotkeyRow hotkey={settings.hotkey} onSave={(hotkey) => update({ hotkey })} />
-        <Row label="Idioma" sub="En automático Dicta detecta el idioma en cada dictado.">
+        <HotkeyRow hotkey={settings.hotkey} onSave={(hotkey) => save({ hotkey })} />
+        <Row label="Idioma" sub="En automático Dilo detecta el idioma en cada dictado.">
           <Select label="Idioma" value={settings.language} onChange={(v) => set({ language: v })}>
             <option value="auto">Automático (recomendado)</option>
             <option disabled>──────────</option>
@@ -94,6 +90,9 @@ export default function SettingsPage() {
         <ModelRow />
         <Row label="Liberar el modelo tras" sub="Libera memoria cuando no dictas. Volver a cargarlo tarda un segundo.">
           <Select label="Liberar el modelo tras" value={String(settings.idle_unload_min)} onChange={(v) => set({ idle_unload_min: Number(v) })}>
+            {![0, 2, 5, 10, 30].includes(settings.idle_unload_min) && (
+              <option value={settings.idle_unload_min}>{fmtNum(settings.idle_unload_min)} min</option>
+            )}
             {[2, 5, 10, 30].map((n) => (
               <option key={n} value={n}>
                 {n} min
@@ -108,7 +107,7 @@ export default function SettingsPage() {
         <Row label="Abrir al iniciar sesión">
           <Switch label="Abrir al iniciar sesión" checked={settings.launch_at_login} onChange={(v) => set({ launch_at_login: v })} />
         </Row>
-        <Row label="Aviso de almacenamiento" sub="Te avisamos en Inicio si Dicta ocupa más de esto.">
+        <Row label="Aviso de almacenamiento" sub="Te avisamos en Inicio si Dilo ocupa más de esto.">
           <Select label="Aviso de almacenamiento" value={String(settings.storage_warn_mb)} onChange={(v) => set({ storage_warn_mb: Number(v) })}>
             {![500, 1000, 2000, 5000].includes(settings.storage_warn_mb) && (
               <option value={settings.storage_warn_mb}>{fmtNum(settings.storage_warn_mb)} MB</option>
@@ -123,25 +122,41 @@ export default function SettingsPage() {
 
       <PermissionsGroup />
 
-      <footer className="about">Dicta 0.2 · open source (MIT)</footer>
+      <footer className="about">Dilo 0.2 · open source (MIT)</footer>
     </>
   );
 }
 
+let captureActive = false;
+const captureListeners = new Set<(v: boolean) => void>();
+const setCaptureActive = (v: boolean) => {
+  captureActive = v;
+  captureListeners.forEach((l) => l(v));
+};
+
 function HotkeyRow({ hotkey, onSave }: { hotkey: string; onSave: (h: string) => Promise<void> }) {
-  const [capturing, setCapturing] = useState(false);
+  const [capturing, setCapturing] = useState(captureActive);
   const [err, setErr] = useState<string | null>(null);
 
+  useEffect(() => {
+    captureListeners.add(setCapturing);
+    setCapturing(captureActive);
+    return () => {
+      captureListeners.delete(setCapturing);
+    };
+  }, []);
+
   const capture = async () => {
+    if (captureActive) return;
     setErr(null);
-    setCapturing(true);
+    setCaptureActive(true);
     try {
       const k = await api.captureHotkey();
       if (k) await onSave(k);
     } catch (e) {
       setErr(errMsg(e));
     } finally {
-      setCapturing(false);
+      setCaptureActive(false);
     }
   };
 
@@ -181,14 +196,19 @@ function ModelRow() {
     );
   }
   if (m.downloading) {
-    const pct = m.total > 0 ? Math.min(100, (m.done / m.total) * 100) : 0;
+    const known = m.total > 0;
+    const pct = known ? Math.min(100, (m.done / m.total) * 100) : 0;
     return (
       <Row
         label="Modelo de voz"
-        sub={`Descargando… ${fmtNum(m.done / 1_000_000)} de ${m.total > 0 ? fmtNum(m.total / 1_000_000) : "…"} MB`}
+        sub={
+          known
+            ? `Descargando… ${fmtNum(m.done / 1_000_000)} de ${fmtNum(m.total / 1_000_000)} MB`
+            : `Descargando… ${fmtNum(m.done / 1_000_000)} MB`
+        }
       >
-        <div className="progress progress-inline">
-          <div className="progress-fill" style={{ width: `${pct}%` }} />
+        <div className={known ? "progress progress-inline" : "progress progress-inline indeterminate"}>
+          <div className="progress-fill" style={known ? { width: `${pct}%` } : undefined} />
         </div>
       </Row>
     );

@@ -1,12 +1,12 @@
 [package]
-name = "dicta"
+name = "dilo"
 version = "0.1.0"
 description = "Hold a key, talk, and your words land at the cursor."
 edition = "2021"
 license = "MIT"
 
 [lib]
-name = "dicta_lib"
+name = "dilo_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -20,7 +20,7 @@ anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
 chrono = "0.4"
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled", "functions"] }
 transcribe-rs = { version = "0.3.11", features = ["onnx"] }
 handy-keys = "0.3.4"
 cpal = "0.16"
@@ -31,11 +31,14 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 whatlang = "0.16"
 hound = "3.5"
 regex = "1"
+sha2 = "0.10"
 tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication"] }
-objc2-foundation = { version = "0.3", features = ["NSString"] }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSPasteboard", "NSPasteboardItem"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSData"] }
 core-foundation = "0.10"
 objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat"] }
 

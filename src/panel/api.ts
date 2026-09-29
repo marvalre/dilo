@@ -35,7 +35,7 @@ export interface Settings {
   language: string; // "auto" | ISO 639-1
   idle_unload_min: number; // 0 = never
   mascot_enabled: boolean;
-  mascot_skin: Skin; // "glass" | "jolly" | "dot" | "aura"
+  mascot_skin: Skin; // "wave" | "glass" | "jolly" | "dot" | "aura"
   mascot_size: MascotSize; // "s" | "m" | "l"
   mic: string | null; // null = system default
   launch_at_login: boolean;

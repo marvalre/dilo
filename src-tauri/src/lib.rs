@@ -17,7 +17,7 @@ use coordinator::Core;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const PANEL: &str = "panel";
-/// Passed by the login item so Dicta starts quietly in the menu bar.
+/// Passed by the login item so Dilo starts quietly in the menu bar.
 const HIDDEN_FLAG: &str = "--hidden";
 
 /// Opens (or focuses) the panel. The window is destroyed on close to free RAM.
@@ -33,7 +33,7 @@ pub fn open_panel(app: &AppHandle, tab: Option<&str>) {
                     None => "index.html".into(),
                 };
                 match WebviewWindowBuilder::new(&app2, PANEL, WebviewUrl::App(url.into()))
-                    .title("Dicta")
+                    .title("Dilo")
                     .inner_size(920.0, 640.0)
                     .min_inner_size(760.0, 520.0)
                     .center()
@@ -65,11 +65,40 @@ pub fn open_panel(app: &AppHandle, tab: Option<&str>) {
     });
 }
 
+/// The app used to be called Dicta (`com.dicta.app`). Move its data — history, settings, the
+/// downloaded model — to the new folder and drop the old login item, so nothing is lost.
+fn migrate_from_dicta(new_dir: &std::path::Path) {
+    let Some(parent) = new_dir.parent() else { return };
+    let old_dir = parent.join("com.dicta.app");
+    if new_dir.exists() || !old_dir.exists() {
+        return;
+    }
+    if std::fs::rename(&old_dir, new_dir).is_err() {
+        return;
+    }
+    let _ = std::fs::rename(new_dir.join("dicta.db"), new_dir.join("dilo.db"));
+    if let Some(home) = std::env::var_os("HOME") {
+        let _ = std::fs::remove_file(std::path::Path::new(&home).join("Library/LaunchAgents/Dicta.plist"));
+    }
+    log::info!("migrated data from {old_dir:?}");
+}
+
+/// False when running from a disk image or macOS's temporary "translocated" copy.
+fn is_stable_location() -> bool {
+    std::env::current_exe()
+        .map(|p| {
+            let p = p.to_string_lossy();
+            !p.starts_with("/Volumes/") && !p.contains("/AppTranslocation/")
+        })
+        .unwrap_or(false)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,ort=warn,enigo=warn,transcribe_rs=warn")).init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| open_panel(app, None)))
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec![HIDDEN_FLAG])))
         .invoke_handler(tauri::generate_handler![
             commands::get_history,
@@ -97,8 +126,17 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let data_dir = app.path().app_data_dir()?;
+            migrate_from_dicta(&data_dir);
             let core = Core::new(data_dir)?;
             app.manage(core.clone());
+
+            // Re-point the login item at this copy of the app (it may have moved).
+            if core.settings.read().unwrap().launch_at_login && is_stable_location() {
+                use tauri_plugin_autostart::ManagerExt;
+                if let Err(e) = app.autolaunch().enable() {
+                    log::error!("autostart: {e}");
+                }
+            }
 
             mascot::create(app.handle())?;
             tray::create(app.handle())?;
@@ -114,7 +152,7 @@ pub fn run() {
                 Err(e) => log::error!("hotkey: {e:#}"),
             }
 
-            if let Ok(wav) = std::env::var("DICTA_SIMULATE_WAV") {
+            if let Ok(wav) = std::env::var("DILO_SIMULATE_WAV") {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_secs(4));
@@ -136,11 +174,11 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building Dicta")
+        .expect("error while building Dilo")
         .run(|app, event| match event {
             // Keep running in the tray when the window closes.
             tauri::RunEvent::ExitRequested { api, code: None, .. } => api.prevent_exit(),
-            // Opening Dicta again (Finder, Spotlight, Dock) shows the window.
+            // Opening Dilo again (Finder, Spotlight, Dock) shows the window.
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => open_panel(app, None),
             _ => {}

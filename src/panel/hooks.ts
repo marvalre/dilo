@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { api, events, type ModelStatus, type Settings } from "./api";
+import { todayKey } from "./format";
 
 /** Subscribe to a Tauri event for the lifetime of the component. Fails silently outside Tauri. */
 export function useTauriEvent<T extends unknown[]>(
@@ -24,8 +25,9 @@ export function useTauriEvent<T extends unknown[]>(
 
 export interface SettingsCtx {
   settings: Settings | null;
-  /** Saves the full settings object. Optimistic; reverts and rethrows on error. */
-  save: (next: Settings) => Promise<void>;
+  /** Merges `patch` into the latest settings and saves. Optimistic; on error reverts only the
+   *  patched fields that no later save has touched, and rethrows. */
+  save: (patch: Partial<Settings>) => Promise<void>;
 }
 
 export const SettingsContext = createContext<SettingsCtx>({ settings: null, save: async () => {} });
@@ -35,25 +37,73 @@ export const useSettings = () => useContext(SettingsContext);
 export function useSettingsState(): SettingsCtx {
   const [settings, setSettings] = useState<Settings | null>(null);
   const current = useRef<Settings | null>(null);
-  current.current = settings;
+  const confirmed = useRef<Settings | null>(null);
+  const reqId = useRef(0);
+  const lastWrite = useRef<Partial<Record<keyof Settings, number>>>({});
+
+  const apply = useCallback((s: Settings) => {
+    current.current = s;
+    setSettings(s);
+  }, []);
+  const fromBackend = useCallback(
+    (s: Settings) => {
+      confirmed.current = s;
+      apply(s);
+    },
+    [apply],
+  );
 
   useEffect(() => {
-    api.settings().then(setSettings).catch(() => {});
-  }, []);
-  useTauriEvent(events.onSettingsChanged, setSettings);
+    api.settings().then(fromBackend).catch(() => {});
+  }, [fromBackend]);
+  useTauriEvent(events.onSettingsChanged, fromBackend);
 
-  const save = useCallback(async (next: Settings) => {
-    const prev = current.current;
-    setSettings(next);
-    try {
-      await api.saveSettings(next);
-    } catch (e) {
-      setSettings(prev);
-      throw e;
-    }
-  }, []);
+  const save = useCallback(
+    async (patch: Partial<Settings>) => {
+      const base = current.current;
+      if (!base) throw new Error("Los ajustes aún no se han cargado.");
+      const id = ++reqId.current;
+      const keys = Object.keys(patch) as (keyof Settings)[];
+      for (const k of keys) lastWrite.current[k] = id;
+      const next = { ...base, ...patch };
+      apply(next);
+      try {
+        await api.saveSettings(next);
+        if (confirmed.current) confirmed.current = { ...confirmed.current, ...patch };
+      } catch (e) {
+        const latest = current.current;
+        const good = confirmed.current ?? base;
+        if (latest) {
+          const revert: Partial<Settings> = {};
+          for (const k of keys) {
+            if (lastWrite.current[k] === id) (revert as Record<string, unknown>)[k] = good[k];
+          }
+          if (Object.keys(revert).length) apply({ ...latest, ...revert });
+        }
+        throw e;
+      }
+    },
+    [apply],
+  );
 
   return { settings, save };
+}
+
+/** Local "YYYY-MM-DD" for today; updates on window focus and every minute. */
+export function useTodayKey(): string {
+  const [key, setKey] = useState(todayKey);
+  useEffect(() => {
+    const on = () => setKey(todayKey());
+    const id = window.setInterval(on, 60_000);
+    window.addEventListener("focus", on);
+    document.addEventListener("visibilitychange", on);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", on);
+      document.removeEventListener("visibilitychange", on);
+    };
+  }, []);
+  return key;
 }
 
 export function useModelStatus(): ModelStatus | null {

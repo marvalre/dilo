@@ -7,7 +7,7 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
 
-const TRAY_ID: &str = "dicta";
+const TRAY_ID: &str = "dilo";
 pub const LANGUAGES: [(&str, &str); 7] = [
     ("auto", "Automático"),
     ("es", "Español"),
@@ -34,11 +34,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let language = Submenu::with_items(app, "Idioma", true, &lang_refs)?;
 
     let hint = MenuItem::with_id(app, "hint", format!("Mantén {hotkey} y habla"), false, None::<&str>)?;
-    let home = MenuItem::with_id(app, "open:home", "Abrir Dicta…", true, None::<&str>)?;
+    let home = MenuItem::with_id(app, "open:home", "Abrir Dilo…", true, None::<&str>)?;
     let history = MenuItem::with_id(app, "open:history", "Historial…", true, None::<&str>)?;
     let stats = MenuItem::with_id(app, "open:dictionary", "Diccionario…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "open:settings", "Ajustes…", true, Some("CmdOrCtrl+,"))?;
-    let quit = MenuItem::with_id(app, "quit", "Salir de Dicta", true, Some("CmdOrCtrl+Q"))?;
+    let quit = MenuItem::with_id(app, "quit", "Salir de Dilo", true, Some("CmdOrCtrl+Q"))?;
     let sep = || PredefinedMenuItem::separator(app);
     Menu::with_items(app, &[&hint, &sep()?, &home, &history, &stats, &settings, &language, &sep()?, &quit])
 }
@@ -48,7 +48,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .icon_as_template(true)
-        .tooltip("Dicta")
+        .tooltip("Dilo")
         .menu(&build_menu(app)?)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| {
@@ -59,12 +59,10 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                 crate::open_panel(app, Some(tab));
             } else if let Some(code) = id.strip_prefix("lang:") {
                 let core = app.state::<Arc<Core>>();
-                let mut s = core.settings.read().unwrap().clone();
-                s.language = code.to_string();
-                let _ = s.save(&core.data_dir);
-                *core.settings.write().unwrap() = s.clone();
-                let _ = tauri::Emitter::emit(app, "settings://changed", &s);
-                refresh(app);
+                let code = code.to_string();
+                if let Err(e) = crate::commands::update_settings(app, &core, |s| s.language = code) {
+                    log::error!("language: {e}");
+                }
             }
         })
         .on_tray_icon_event(|tray, event| {

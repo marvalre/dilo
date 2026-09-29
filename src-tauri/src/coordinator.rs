@@ -4,15 +4,17 @@ use crate::recorder::{Recorder, Recording};
 use crate::{engine::Engine, hotkey, mascot, models, paste, settings::Settings, store::*};
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Recordings shorter than this are treated as accidental taps.
 const MIN_MS: i64 = 300;
 /// Below this RMS the recording is considered silence.
 const MIN_PEAK_RMS: f32 = 0.01;
+/// Keep listening this long after the key is released so the last word isn't clipped.
+const TAIL: Duration = Duration::from_millis(150);
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct ModelStatus {
@@ -32,7 +34,10 @@ pub struct Core {
     pub settings: RwLock<Settings>,
     pub hotkey: Mutex<Option<hotkey::HotkeyHandle>>,
     pub model: Mutex<ModelStatus>,
-    busy: AtomicBool,
+    /// Dictations recorded but not yet pasted.
+    jobs: AtomicUsize,
+    /// Transcribe + paste one dictation at a time, in order.
+    pipeline: Mutex<()>,
     /// True while the app is recording a new hotkey: dictation is paused.
     pub capturing: AtomicBool,
     press: Mutex<Option<Press>>,
@@ -40,13 +45,14 @@ pub struct Core {
 
 struct Press {
     started_at: i64,
-    app_name: Option<String>,
+    target: paste::Target,
+    turn: Option<mascot::Turn>,
 }
 
 impl Core {
     pub fn new(data_dir: PathBuf) -> anyhow::Result<Arc<Self>> {
         let settings = Settings::load(&data_dir);
-        let store = Store::open(&data_dir.join("dicta.db"))?;
+        let store = Store::open(&data_dir.join("dilo.db"))?;
         let exe = std::env::current_exe()?;
         let engine = Engine::new(models::model_dir(&data_dir), exe);
         Ok(Arc::new(Self {
@@ -57,7 +63,8 @@ impl Core {
             settings: RwLock::new(settings),
             hotkey: Mutex::new(None),
             model: Mutex::new(ModelStatus::default()),
-            busy: AtomicBool::new(false),
+            jobs: AtomicUsize::new(0),
+            pipeline: Mutex::new(()),
             capturing: AtomicBool::new(false),
             press: Mutex::new(None),
         }))
@@ -89,43 +96,42 @@ pub fn on_hotkey(app: &AppHandle, pressed: bool) {
 }
 
 fn on_press(app: &AppHandle, core: &Arc<Core>) {
-    if core.capturing.load(Ordering::SeqCst) {
+    if core.capturing.load(Ordering::SeqCst) || core.recorder.is_recording() {
         return;
     }
-    if core.busy.swap(true, Ordering::SeqCst) {
-        return; // still transcribing the previous one
-    }
     if !models::is_ready(&core.model_dir()) {
-        core.busy.store(false, Ordering::SeqCst);
         crate::open_panel(app, Some("settings"));
         return;
     }
-    // Load the model while the user talks so release → paste is fast.
-    let engine = core.engine.clone();
-    std::thread::spawn(move || {
-        if let Err(e) = engine.preload() {
-            log::error!("preload: {e:#}");
-        }
-    });
+    let started_at = now_ms();
+    let (mascot_on, mic) = {
+        let s = core.settings.read().unwrap();
+        (s.mascot_enabled, s.mic.clone())
+    };
 
-    let mascot_on = core.settings.read().unwrap().mascot_enabled;
-    let mic = core.settings.read().unwrap().mic.clone();
-    *core.press.lock().unwrap() = Some(Press { started_at: now_ms(), app_name: paste::frontmost_app() });
-
+    // Open the mic first: every millisecond before this is speech we'd lose.
+    let t = Instant::now();
     let level_app = app.clone();
     let on_level: crate::recorder::LevelFn = Arc::new(move |l| mascot::set_level(&level_app, l));
-    match core.recorder.start(mic, on_level) {
+    let started = core.recorder.start(mic, on_level);
+    log::info!("mic open in {:?}", t.elapsed());
+
+    let turn = mascot_on.then(|| mascot::show(app));
+    match started {
         Ok(()) => {
-            if mascot_on {
-                mascot::show(app);
-            }
+            *core.press.lock().unwrap() = Some(Press { started_at, target: paste::frontmost(), turn });
+            // Load the model while the user talks so release → paste is fast.
+            let engine = core.engine.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = engine.preload() {
+                    log::error!("preload: {e:#}");
+                }
+            });
         }
         Err(e) => {
             log::error!("recorder: {e:#}");
-            core.busy.store(false, Ordering::SeqCst);
-            if mascot_on {
-                mascot::show(app);
-                mascot::flash_then_swallow(app, "confused", 1200);
+            if let Some(t) = turn {
+                mascot::flash_then_swallow(app, t, "confused", 1200);
             }
             crate::open_panel(app, Some("settings"));
         }
@@ -136,65 +142,102 @@ fn on_release(app: &AppHandle, core: Arc<Core>) {
     if !core.recorder.is_recording() {
         return;
     }
-    let app = app.clone();
-    std::thread::spawn(move || {
-        finish(&app, &core);
-        core.busy.store(false, Ordering::SeqCst);
-    });
-}
-
-fn finish(app: &AppHandle, core: &Core) {
-    let recording = match core.recorder.stop() {
+    // Stopping here (on the hotkey thread) means a quick next press finds the mic free.
+    std::thread::sleep(TAIL);
+    let press = core.press.lock().unwrap().take();
+    let recording = core.recorder.stop();
+    let press = press.unwrap_or(Press { started_at: now_ms(), target: paste::Target::default(), turn: None });
+    let recording = match recording {
         Ok(r) => r,
         Err(e) => {
             log::error!("stop: {e:#}");
-            mascot::swallow(app);
+            if let Some(t) = press.turn {
+                mascot::swallow(app, t);
+            }
             return;
         }
     };
-    let press = core.press.lock().unwrap().take();
-    let (started_at, app_name) = press.map(|p| (p.started_at, p.app_name)).unwrap_or((now_ms(), None));
-    complete(app, core, recording, started_at, app_name);
+    core.jobs.fetch_add(1, Ordering::SeqCst);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        {
+            let _order = core.pipeline.lock().unwrap_or_else(|p| p.into_inner());
+            complete(&app, &core, recording, press);
+        }
+        core.jobs.fetch_sub(1, Ordering::SeqCst);
+    });
 }
 
-fn complete(app: &AppHandle, core: &Core, recording: Recording, started_at: i64, app_name: Option<String>) {
+fn complete(app: &AppHandle, core: &Core, recording: Recording, press: Press) {
+    let turn = press.turn;
+    let face = |state: &str| {
+        if let Some(t) = turn {
+            mascot::set_state(app, t, state);
+        }
+    };
+    let swallow = || {
+        if let Some(t) = turn {
+            mascot::swallow(app, t);
+        }
+    };
     if recording.duration_ms < MIN_MS || recording.peak_rms < MIN_PEAK_RMS {
         log::info!("ignored: {} ms, peak {:.4}", recording.duration_ms, recording.peak_rms);
-        mascot::swallow(app);
+        swallow();
         return;
     }
+    if recording.truncated {
+        log::warn!("recording cut at {} s", crate::recorder::MAX_SECONDS);
+    }
 
-    mascot::set_state(app, "thinking");
-    let t = std::time::Instant::now();
+    face("thinking");
+    let t = Instant::now();
     let result = core.engine.transcribe(&recording.samples);
     log::info!("transcribed {} ms of audio in {:?}", recording.duration_ms, t.elapsed());
 
     let new = match result {
-        Ok(text) if text.is_empty() => {
-            mascot::swallow(app);
+        Ok(text) if text.trim().is_empty() => {
+            swallow();
             return;
         }
         Ok(raw) => {
             let rules = core.store.rules().unwrap_or_default();
             let text = crate::rules::apply(&raw, &rules);
-            if let Err(e) = paste::paste_text(&text) {
+            // Cmd+V while the hotkey is held (the user already started the next
+            // dictation) would read as a different key combo and cut that
+            // recording. Paste once they let go; the queue keeps the order.
+            while core.recorder.is_recording() {
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            let (pasted, restore) = paste::paste_text(&text, &press.target);
+            if let Err(e) = pasted {
                 log::error!("paste: {e:#}");
             }
-            mascot::set_state(app, "done");
-            std::thread::sleep(Duration::from_millis(280));
-            mascot::swallow(app);
+            face("done");
+            if let Some(r) = restore {
+                r.finish();
+            }
+            swallow();
             let language = detect_language(&text, &core.settings.read().unwrap().language);
-            NewDictation { created_at: started_at, duration_ms: recording.duration_ms, text, language, app_name, error: None }
+            NewDictation {
+                created_at: press.started_at,
+                duration_ms: recording.duration_ms,
+                text,
+                language,
+                app_name: press.target.name,
+                error: None,
+            }
         }
         Err(e) => {
             log::error!("{e:#}");
-            mascot::flash_then_swallow(app, "sad", 1200);
+            if let Some(t) = turn {
+                mascot::flash_then_swallow(app, t, "sad", 1200);
+            }
             NewDictation {
-                created_at: started_at,
+                created_at: press.started_at,
                 duration_ms: recording.duration_ms,
                 text: String::new(),
                 language: None,
-                app_name,
+                app_name: press.target.name,
                 error: Some(format!("{e:#}")),
             }
         }
@@ -215,10 +258,10 @@ pub fn simulate(app: &AppHandle, wav: &std::path::Path) -> anyhow::Result<()> {
         hound::SampleFormat::Int => reader.samples::<i16>().map(|s| s.map(|v| v as f32 / 32768.0)).collect::<Result<_, _>>()?,
     };
     let started_at = now_ms();
-    let app_name = paste::frontmost_app();
+    let target = paste::frontmost();
     let engine = core.engine.clone();
     std::thread::spawn(move || engine.preload());
-    mascot::show(app);
+    let turn = Some(mascot::show(app));
     let chunk = 16_000 / 30;
     let mut peak = 0f32;
     for c in samples.chunks(chunk) {
@@ -228,31 +271,28 @@ pub fn simulate(app: &AppHandle, wav: &std::path::Path) -> anyhow::Result<()> {
         std::thread::sleep(Duration::from_millis(33));
     }
     let duration_ms = samples.len() as i64 * 1000 / 16_000;
-    complete(app, &core, Recording { samples, duration_ms, peak_rms: peak }, started_at, app_name);
+    let _order = core.pipeline.lock().unwrap_or_else(|p| p.into_inner());
+    let rec = Recording { samples, duration_ms, peak_rms: peak, truncated: false };
+    complete(app, &core, rec, Press { started_at, target, turn });
     Ok(())
 }
 
-/// The user's language setting wins; with "auto" we guess from the text.
+/// The user's language setting wins; with "auto" we guess from the text, among
+/// the languages the app offers, and only when the guess is reliable (short
+/// phrases like "Ronda 1, primera frase." otherwise come out as Swedish).
 fn detect_language(text: &str, setting: &str) -> Option<String> {
+    use whatlang::Lang;
     if setting != "auto" {
         return Some(setting.to_string());
     }
-    let info = whatlang::detect(text)?;
-    // whatlang codes are ISO 639-3; map the common ones to ISO 639-1.
-    let code = match info.lang().code() {
-        "spa" => "es",
-        "eng" => "en",
-        "fra" => "fr",
-        "deu" => "de",
-        "por" => "pt",
-        "ita" => "it",
-        "nld" => "nl",
-        "pol" => "pl",
-        "ukr" => "uk",
-        "rus" => "ru",
-        other => other,
-    };
-    Some(code.to_string())
+    const LANGS: [(Lang, &str); 6] =
+        [(Lang::Spa, "es"), (Lang::Eng, "en"), (Lang::Fra, "fr"), (Lang::Deu, "de"), (Lang::Por, "pt"), (Lang::Ita, "it")];
+    let detector = whatlang::Detector::with_allowlist(LANGS.iter().map(|(l, _)| *l).collect());
+    let info = detector.detect(text)?;
+    if !info.is_reliable() {
+        return None;
+    }
+    LANGS.iter().find(|(l, _)| *l == info.lang()).map(|(_, c)| c.to_string())
 }
 
 /// Periodically frees the model from RAM when idle.
@@ -260,7 +300,7 @@ pub fn spawn_idle_unloader(core: Arc<Core>) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(30));
         let min = core.settings.read().unwrap().idle_unload_min;
-        if min > 0 && !core.busy.load(Ordering::SeqCst) {
+        if min > 0 && core.jobs.load(Ordering::SeqCst) == 0 && !core.recorder.is_recording() {
             core.engine.unload_if_idle(Duration::from_secs(min as u64 * 60));
         }
     });
@@ -276,6 +316,11 @@ mod tests {
         assert_eq!(
             detect_language("Mañana tengo una reunión muy importante con el equipo", "auto").as_deref(),
             Some("es")
+        );
+        assert_ne!(detect_language("Ronda 1, segunda frase.", "auto").as_deref(), Some("sv"));
+        assert_eq!(
+            detect_language("I need to finish the quarterly report before the meeting tomorrow", "auto").as_deref(),
+            Some("en")
         );
     }
 }

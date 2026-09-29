@@ -6,14 +6,14 @@ import { AutoTextarea, PageHeader, Segmented, Switch } from "./ui";
 
 const COPY: Record<RuleKind, { explain: [string, string, string]; from: string; to: string; emptyTitle: string; emptyText: string }> = {
   correction: {
-    explain: ["Cuando el modelo escriba algo mal, Dicta lo corrige solo. Ej:", "cloud", "Claude"],
+    explain: ["Cuando el modelo escriba algo mal, Dilo lo corrige solo. Ej:", "cloud", "Claude"],
     from: "Escuchado",
     to: "Escribir",
     emptyTitle: "Sin correcciones",
     emptyText: "Añade palabras que el modelo suele escribir mal: nombres, marcas o términos técnicos.",
   },
   shortcut: {
-    explain: ["Di una frase y Dicta pega otra cosa. Ej:", "mi correo", "tu@email.com"],
+    explain: ["Di una frase y Dilo pega otra cosa. Ej:", "mi correo", "tu@email.com"],
     from: "Cuando digo",
     to: "Pegar",
     emptyTitle: "Sin atajos",
@@ -144,6 +144,7 @@ function AddRule({ kind, onAdd }: { kind: RuleKind; onAdd: (from: string, to: st
             placeholder="tu@email.com"
             spellCheck={false}
             onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
               if (e.key === "Enter" && e.metaKey) {
                 e.preventDefault();
                 submit();
@@ -184,6 +185,7 @@ function RuleRow({
     if (await onSave({ ...r, from: from.trim(), to: r.kind === "shortcut" ? to.replace(/^\s+|\s+$/g, "") : to.trim() })) setEditing(false);
   };
   const keys = (e: KeyboardEvent) => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === "Escape") cancel();
     else if (e.key === "Enter" && (e.metaKey || !(e.target instanceof HTMLTextAreaElement))) {
       e.preventDefault();
