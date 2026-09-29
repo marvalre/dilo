@@ -40,6 +40,7 @@ export interface Settings {
   mic: string | null; // null = system default
   launch_at_login: boolean;
   storage_warn_mb: number; // warn when total storage exceeds this
+  auto_update: boolean; // look for new versions in the background
 }
 
 export interface ModelStatus {
@@ -84,7 +85,19 @@ export interface StorageInfo {
   dictations: number;
 }
 
+export interface UpdateInfo {
+  version: string;
+  current: string;
+  notes: string | null;
+}
+
 export const api = {
+  /** Looks for a newer version on GitHub. Resolves null when up to date. */
+  checkUpdate: () => invoke<UpdateInfo | null>("check_update"),
+  /** Downloads, verifies and installs the update found by checkUpdate, then relaunches the app. */
+  installUpdate: () => invoke<void>("install_update"),
+  /** Update the background check already found, if any. */
+  pendingUpdate: () => invoke<UpdateInfo | null>("pending_update"),
   history: (query: string, offset: number) => invoke<Dictation[]>("get_history", { query, offset }),
   updateDictation: (id: number, text: string) => invoke<Dictation>("update_dictation", { id, text }),
   deleteDictation: (id: number) => invoke<void>("delete_dictation", { id }),
@@ -113,6 +126,9 @@ export const api = {
 };
 
 export const events = {
+  onUpdateAvailable: (cb: (u: UpdateInfo) => void): Promise<UnlistenFn> => listen<UpdateInfo>("update://available", (e) => cb(e.payload)),
+  onUpdateProgress: (cb: (p: { done: number; total: number }) => void): Promise<UnlistenFn> =>
+    listen<{ done: number; total: number }>("update://progress", (e) => cb(e.payload)),
   onHistoryChanged: (cb: () => void): Promise<UnlistenFn> => listen("history://changed", () => cb()),
   onModelStatus: (cb: (s: ModelStatus) => void): Promise<UnlistenFn> =>
     listen<ModelStatus>("model://status", (e) => cb(e.payload)),

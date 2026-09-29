@@ -20,6 +20,9 @@ fn main() {
             "permissions",
             "open_accessibility_settings",
             "open_microphone_settings",
+            "check_update",
+            "install_update",
+            "pending_update",
         ]),
     ))
     .expect("tauri build");

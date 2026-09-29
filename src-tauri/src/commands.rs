@@ -129,6 +129,9 @@ pub fn update_settings(app: &AppHandle, core: &Core, change: impl FnOnce(&mut Se
 #[tauri::command]
 pub async fn capture_hotkey(core: State<'_, Arc<Core>>) -> Result<Option<String>, String> {
     use std::sync::atomic::Ordering;
+    if !hotkey::has_accessibility() {
+        return Err("Primero dale permiso de Accesibilidad a Dilo (más abajo, en Permisos).".into());
+    }
     let core = core.inner().clone();
     if core.capturing.swap(true, Ordering::SeqCst) {
         return Err("Ya estoy esperando una tecla".into());
@@ -242,4 +245,19 @@ pub fn open_accessibility_settings() {
 #[tauri::command]
 pub fn open_microphone_settings() {
     crate::permissions::request_or_open_microphone();
+}
+
+#[tauri::command]
+pub async fn check_update(app: AppHandle) -> Result<Option<crate::updater::UpdateInfo>, String> {
+    crate::updater::check(&app).await
+}
+
+#[tauri::command]
+pub async fn install_update(app: AppHandle) -> Result<(), String> {
+    crate::updater::install(&app).await
+}
+
+#[tauri::command]
+pub fn pending_update(state: State<'_, crate::updater::UpdateState>) -> Option<crate::updater::UpdateInfo> {
+    state.available()
 }

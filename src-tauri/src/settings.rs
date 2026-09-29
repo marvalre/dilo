@@ -25,6 +25,8 @@ pub struct Settings {
     pub launch_at_login: bool,
     /// Warn in the app when total storage (model + history) exceeds this.
     pub storage_warn_mb: u64,
+    /// Look for new versions in the background.
+    pub auto_update: bool,
 }
 
 impl Default for Settings {
@@ -39,6 +41,7 @@ impl Default for Settings {
             mic: None,
             launch_at_login: false,
             storage_warn_mb: 2000,
+            auto_update: true,
         }
     }
 }

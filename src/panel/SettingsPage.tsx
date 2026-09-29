@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api, type Permissions, type Settings } from "./api";
-import { useModelStatus, useSettings } from "./hooks";
+import { useModelStatus, useSettings, useUpdate } from "./hooks";
+import { getVersion } from "@tauri-apps/api/app";
 import { errMsg, fmtNum, langName } from "./format";
 import { hotkeyCaps } from "./hotkey";
 import { CheckIcon } from "./icons";
@@ -31,10 +32,52 @@ function Group({ title, children, footer }: { title?: string; children: ReactNod
   );
 }
 
+function useAppVersion(): string {
+  const [v, setV] = useState("");
+  useEffect(() => {
+    getVersion().then(setV).catch(() => {});
+  }, []);
+  return v;
+}
+
+function UpdatesGroup({ autoUpdate, onAutoUpdate }: { autoUpdate: boolean; onAutoUpdate: (v: boolean) => void }) {
+  const { phase, info, progress, error, check, install } = useUpdate();
+  const version = useAppVersion();
+  const known = !!progress && progress.total > 0;
+  const pct = known ? Math.min(100, (progress!.done / progress!.total) * 100) : 0;
+
+  let sub: ReactNode = `Versión ${version}`;
+  if (phase === "checking") sub = "Buscando…";
+  else if (phase === "uptodate") sub = `Tienes la última versión (${version}).`;
+  else if (phase === "available" && info) sub = `Hay una versión nueva: ${info.version}. Tu versión es ${info.current}.`;
+  else if (phase === "downloading") sub = known ? `Descargando… ${Math.round(pct)} %` : "Descargando…";
+  else if (phase === "error") sub = <span className="error-text">{error}</span>;
+
+  return (
+    <Group title="Actualizaciones" footer="Al actualizar, Dilo se reinicia sola. No tienes que volver a dar permisos.">
+      <Row label="Dilo" sub={sub}>
+        {phase === "available" || phase === "downloading" ? (
+          <button className="btn btn-primary" onClick={install} disabled={phase === "downloading"}>
+            {phase === "downloading" ? "Actualizando…" : `Actualizar a ${info?.version}`}
+          </button>
+        ) : (
+          <button className="btn" onClick={check} disabled={phase === "checking"}>
+            Buscar actualizaciones
+          </button>
+        )}
+      </Row>
+      <Row label="Buscar automáticamente" sub="Revisa cada pocas horas y te avisa en Inicio y en el menú.">
+        <Switch label="Buscar actualizaciones automáticamente" checked={autoUpdate} onChange={onAutoUpdate} />
+      </Row>
+    </Group>
+  );
+}
+
 export default function SettingsPage() {
   const { settings, save } = useSettings();
   const [error, setError] = useState<string | null>(null);
   const [mics, setMics] = useState<string[]>([]);
+  const version = useAppVersion();
 
   useEffect(() => {
     api.microphones().then(setMics).catch(() => {});
@@ -120,9 +163,11 @@ export default function SettingsPage() {
         </Row>
       </Group>
 
+      <UpdatesGroup autoUpdate={settings.auto_update} onAutoUpdate={(v) => set({ auto_update: v })} />
+
       <PermissionsGroup />
 
-      <footer className="about">Dilo 0.2 · open source (MIT)</footer>
+      <footer className="about">Dilo {version} · open source (MIT)</footer>
     </>
   );
 }

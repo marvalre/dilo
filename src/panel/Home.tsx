@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, events, type Stats, type StorageInfo } from "./api";
-import { useModelStatus, useTauriEvent } from "./hooks";
+import { useModelStatus, useTauriEvent, useUpdate } from "./hooks";
 import { errMsg, fmtBytes, fmtDayMonth, fmtMinutes, fmtNum, greeting, langName, parseDay, todayKey } from "./format";
 import { DownloadIcon, WarnIcon } from "./icons";
 import type { Section } from "./App";
@@ -34,6 +34,7 @@ export default function Home({ onNavigate }: { onNavigate: (s: Section) => void 
         </div>
       </header>
 
+      <UpdateCard />
       <ModelCard />
 
       <section className="hero-row">
@@ -105,6 +106,36 @@ function StatCard({ label, value, unit }: { label: string; value: string; unit?:
       </div>
       <div className="stat-label">{label}</div>
     </div>
+  );
+}
+
+function UpdateCard() {
+  const { phase, info, progress, error, install } = useUpdate();
+  if (phase !== "available" && phase !== "downloading") return null;
+  const known = !!progress && progress.total > 0;
+  const pct = known ? Math.min(100, (progress!.done / progress!.total) * 100) : 0;
+  return (
+    <section className="model-card">
+      <div className="model-card-icon">
+        <DownloadIcon />
+      </div>
+      <div className="model-card-body">
+        <h2 className="model-card-title">{phase === "downloading" ? "Actualizando Dilo…" : `Hay una versión nueva de Dilo (${info?.version})`}</h2>
+        {phase === "downloading" ? (
+          <div className={known ? "progress" : "progress indeterminate"} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={known ? Math.round(pct) : undefined}>
+            <div className="progress-fill" style={known ? { width: `${pct}%` } : undefined} />
+          </div>
+        ) : (
+          <p className="model-card-text">Se instala con un clic y Dilo se reinicia sola. Tus dictados y ajustes se conservan.</p>
+        )}
+        {error && <p className="error-text">{error}</p>}
+      </div>
+      {phase === "available" && (
+        <button className="btn btn-primary" onClick={install}>
+          Actualizar
+        </button>
+      )}
+    </section>
   );
 }
 

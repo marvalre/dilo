@@ -21,6 +21,12 @@ Gratis, open source y 100 % local: tu voz nunca sale de tu computadora.
 
 Requiere una Mac con **Apple Silicon (M1 o más nuevo)** y macOS 13 o superior.
 
+### Actualizaciones
+
+Desde la versión 0.3, Dilo se actualiza sola: cuando hay una versión nueva verás un aviso en **Inicio** y en el menú de la barra;
+pulsa **Actualizar** (o ve a **Ajustes → Actualizaciones**) y se descarga, se verifica su firma, se instala y Dilo se reinicia. No vuelve
+a pedir autorización a macOS ni tus permisos. Si vienes de la 0.2, instala la 0.3 a mano una última vez.
+
 ## Cómo funciona
 
 1. Mantén presionada **Fn** (Mac) o **Control derecha** (Windows/Linux).
@@ -57,6 +63,14 @@ así que esa memoria vuelve completa al sistema. Mientras no dictas, Dilo ocupa 
 - **Accesibilidad**: para detectar la tecla y pegar el texto.
 - **Micrófono**: para escucharte (solo mientras mantienes la tecla).
 - Recomendado: Ajustes del Sistema → Teclado → "Al pulsar la tecla 🌐" → **No hacer nada**.
+
+## Publicar una versión (para quien mantiene el proyecto)
+
+1. Sube el número de versión en `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` y `package.json`, y escribe las notas en `release-notes.md`.
+2. `./scripts/release.sh` compila, firma (app y paquete de actualización), y deja todo en `release/`; con `--publish` crea la release en GitHub.
+3. Necesitas la llave de actualizaciones en `~/.tauri/dilo-updater.key` (se genera con `bun tauri signer generate -w ~/.tauri/dilo-updater.key`;
+   **no la subas al repo ni la pierdas**: sin ella no se pueden firmar actualizaciones) y el mismo certificado de firma de siempre.
+   La llave pública va en `tauri.conf.json`.
 
 ## Compilar
 

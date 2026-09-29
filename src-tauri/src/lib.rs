@@ -12,6 +12,7 @@ pub mod settings;
 pub mod stats;
 pub mod store;
 pub mod tray;
+pub mod updater;
 
 use coordinator::Core;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -84,7 +85,7 @@ fn migrate_from_dicta(new_dir: &std::path::Path) {
 }
 
 /// False when running from a disk image or macOS's temporary "translocated" copy.
-fn is_stable_location() -> bool {
+pub(crate) fn is_stable_location() -> bool {
     std::env::current_exe()
         .map(|p| {
             let p = p.to_string_lossy();
@@ -99,6 +100,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| open_panel(app, None)))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec![HIDDEN_FLAG])))
         .invoke_handler(tauri::generate_handler![
             commands::get_history,
@@ -120,6 +122,9 @@ pub fn run() {
             commands::permissions,
             commands::open_accessibility_settings,
             commands::open_microphone_settings,
+            commands::check_update,
+            commands::install_update,
+            commands::pending_update,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -137,6 +142,9 @@ pub fn run() {
                     log::error!("autostart: {e}");
                 }
             }
+
+            app.manage(updater::UpdateState::default());
+            tauri::async_runtime::spawn(updater::background(app.handle().clone()));
 
             mascot::create(app.handle())?;
             tray::create(app.handle())?;

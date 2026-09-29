@@ -25,6 +25,9 @@
     "allow-copy-text",
     "allow-permissions",
     "allow-open-accessibility-settings",
-    "allow-open-microphone-settings"
+    "allow-open-microphone-settings",
+    "allow-check-update",
+    "allow-install-update",
+    "allow-pending-update"
   ]
 }

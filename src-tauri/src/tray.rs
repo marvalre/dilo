@@ -40,6 +40,10 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let settings = MenuItem::with_id(app, "open:settings", "Ajustes…", true, Some("CmdOrCtrl+,"))?;
     let quit = MenuItem::with_id(app, "quit", "Salir de Dilo", true, Some("CmdOrCtrl+Q"))?;
     let sep = || PredefinedMenuItem::separator(app);
+    if let Some(u) = app.state::<crate::updater::UpdateState>().available() {
+        let update = MenuItem::with_id(app, "open:settings", format!("Actualizar a Dilo {}…", u.version), true, None::<&str>)?;
+        return Menu::with_items(app, &[&hint, &sep()?, &update, &home, &history, &stats, &settings, &language, &sep()?, &quit]);
+    }
     Menu::with_items(app, &[&hint, &sep()?, &home, &history, &stats, &settings, &language, &sep()?, &quit])
 }
 

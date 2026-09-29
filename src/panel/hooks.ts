@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { api, events, type ModelStatus, type Settings } from "./api";
+import { api, events, type ModelStatus, type Settings, type UpdateInfo } from "./api";
 import { todayKey } from "./format";
 
 /** Subscribe to a Tauri event for the lifetime of the component. Fails silently outside Tauri. */
@@ -137,4 +137,55 @@ export function usePageVisible(): boolean {
     return () => document.removeEventListener("visibilitychange", on);
   }, []);
   return v;
+}
+
+export type UpdatePhase = "idle" | "checking" | "uptodate" | "available" | "downloading" | "error";
+
+/** State of the in-app updater: what the background check found, plus manual check / install. */
+export function useUpdate() {
+  const [phase, setPhase] = useState<UpdatePhase>("idle");
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.pendingUpdate().then((u) => {
+      if (u) {
+        setInfo(u);
+        setPhase("available");
+      }
+    }).catch(() => {});
+  }, []);
+  useTauriEvent(events.onUpdateAvailable, (u: UpdateInfo) => {
+    setInfo(u);
+    setPhase((p) => (p === "downloading" ? p : "available"));
+  });
+  useTauriEvent(events.onUpdateProgress, (p: { done: number; total: number }) => setProgress(p));
+
+  const check = useCallback(async () => {
+    setError(null);
+    setPhase("checking");
+    try {
+      const u = await api.checkUpdate();
+      setInfo(u);
+      setPhase(u ? "available" : "uptodate");
+    } catch (e) {
+      setError(typeof e === "string" ? e : String(e));
+      setPhase("error");
+    }
+  }, []);
+
+  const install = useCallback(async () => {
+    setError(null);
+    setProgress(null);
+    setPhase("downloading");
+    try {
+      await api.installUpdate(); // the app relaunches itself on success
+    } catch (e) {
+      setError(typeof e === "string" ? e : String(e));
+      setPhase("error");
+    }
+  }, []);
+
+  return { phase, info, progress, error, check, install };
 }
