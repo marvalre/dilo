@@ -11,7 +11,8 @@ const FILE: &str = "settings.json";
 pub struct Settings {
     /// handy-keys hotkey string, e.g. "Fn", "CtrlRight", "Ctrl+Space".
     pub hotkey: String,
-    /// "es" or "en". Parakeet cannot be forced to a language; this labels history and stats.
+    /// "auto" or an ISO 639-1 code; Spanish by default. Parakeet cannot be forced to a language,
+    /// so this labels history and stats.
     pub language: String,
     /// Free the model from RAM after this many idle minutes (0 = never).
     pub idle_unload_min: u32,
@@ -55,7 +56,6 @@ pub fn default_hotkey() -> &'static str {
 }
 
 pub const SKINS: [&str; 5] = ["wave", "glass", "jolly", "dot", "aura"];
-pub const LANGUAGES: [&str; 2] = ["es", "en"];
 pub const SIZES: [&str; 3] = ["s", "m", "l"];
 
 impl Settings {
@@ -70,7 +70,7 @@ impl Settings {
         if crate::hotkey::validate(&self.hotkey).is_err() {
             self.hotkey = default_hotkey().into();
         }
-        if !LANGUAGES.contains(&self.language.as_str()) {
+        if self.language.trim().is_empty() {
             self.language = "es".into();
         }
         self
@@ -114,9 +114,10 @@ mod tests {
         let s = Settings::load(dir.path());
         assert_eq!(s.language, "en");
         assert_eq!(s.idle_unload_min, 2);
+        assert_eq!(Settings::default().language, "es");
         std::fs::write(dir.path().join(FILE), r#"{"language":"auto"}"#).unwrap();
-        assert_eq!(Settings::load(dir.path()).language, "es");
-        std::fs::write(dir.path().join(FILE), r#"{"language":"fr"}"#).unwrap();
+        assert_eq!(Settings::load(dir.path()).language, "auto");
+        std::fs::write(dir.path().join(FILE), r#"{"language":""}"#).unwrap();
         assert_eq!(Settings::load(dir.path()).language, "es");
     }
 

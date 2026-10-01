@@ -7,7 +7,7 @@ import { hotkeyCaps } from "./hotkey";
 import { CheckIcon } from "./icons";
 import { Keycaps, PageHeader, Select, Switch } from "./ui";
 
-const LANGS = ["es", "en"];
+const LANGS = ["es", "en", "fr", "de", "pt", "it", "nl", "pl", "uk", "ru", "bg", "hr", "cs", "da", "et", "fi", "el", "hu", "lv", "lt", "mt", "ro", "sk", "sl", "sv"];
 const DEFAULT_MIC = "__default__";
 
 function Row({ label, sub, children }: { label: ReactNode; sub?: ReactNode; children?: ReactNode }) {
@@ -106,9 +106,16 @@ export default function SettingsPage() {
         }
       >
         <HotkeyRow hotkey={settings.hotkey} onSave={(hotkey) => save({ hotkey })} />
-        <Row label="Idioma principal" sub="Etiqueta tus dictados y estadísticas. Dilo entiende español e inglés por sí solo.">
+        <Row label="Idioma" sub="Español por defecto. Etiqueta tus dictados y estadísticas; el modelo entiende varios idiomas por sí solo.">
           <Select label="Idioma" value={settings.language} onChange={(v) => set({ language: v })}>
-            {LANGS.map((c) => (
+            {LANGS.slice(0, 2).map((c) => (
+              <option key={c} value={c}>
+                {langName(c)}
+              </option>
+            ))}
+            <option value="auto">Automático</option>
+            <option disabled>──────────</option>
+            {LANGS.slice(2).map((c) => (
               <option key={c} value={c}>
                 {langName(c)}
               </option>

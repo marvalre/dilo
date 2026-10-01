@@ -32,7 +32,7 @@ export interface Stats {
 
 export interface Settings {
   hotkey: string; // handy-keys syntax: "Fn", "CtrlRight", "OptRight", "Cmd+Shift+D"
-  language: string; // "es" | "en" (label only; the model detects the language itself)
+  language: string; // "auto" | ISO 639-1
   idle_unload_min: number; // 0 = never
   mascot_enabled: boolean;
   mascot_skin: Skin; // "wave" | "glass" | "jolly" | "dot" | "aura"
