@@ -8,15 +8,7 @@ use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
 
 const TRAY_ID: &str = "dilo";
-pub const LANGUAGES: [(&str, &str); 7] = [
-    ("auto", "Automático"),
-    ("es", "Español"),
-    ("en", "English"),
-    ("fr", "Français"),
-    ("de", "Deutsch"),
-    ("pt", "Português"),
-    ("it", "Italiano"),
-];
+pub const LANGUAGES: [(&str, &str); 2] = [("es", "Español"), ("en", "English")];
 
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let core = app.state::<Arc<Core>>();
