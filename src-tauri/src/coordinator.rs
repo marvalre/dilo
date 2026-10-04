@@ -75,12 +75,36 @@ impl Core {
     }
 
     pub fn model_status(&self) -> ModelStatus {
-        let mut s = self.model.lock().unwrap().clone();
+        let mut s = lock(&self.model).clone();
         s.ready = models::is_ready(&self.model_dir());
         s.loaded = self.engine.is_loaded();
         s
     }
 }
+
+/// Poisoned locks are still usable: a panic in one dictation must not disable the next.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Decrements the pending-dictation counter even if the pipeline panics, so the
+/// idle unloader is never blocked forever.
+struct JobGuard<'a>(&'a AtomicUsize);
+impl Drop for JobGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// True when a recording is too short or too quiet to be speech.
+fn is_ignorable(duration_ms: i64, peak_rms: f32) -> bool {
+    // `!(x >= y)` so a NaN level counts as silence.
+    duration_ms < MIN_MS || !(peak_rms >= MIN_PEAK_RMS)
+}
+
+/// Longest a finished dictation waits for the user to let go of the hotkey
+/// before pasting anyway (recordings are capped at MAX_SECONDS).
+const MAX_PASTE_WAIT: Duration = Duration::from_secs(crate::recorder::MAX_SECONDS as u64 + 10);
 
 pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -105,7 +129,7 @@ fn on_press(app: &AppHandle, core: &Arc<Core>) {
     }
     let started_at = now_ms();
     let (mascot_on, mic) = {
-        let s = core.settings.read().unwrap();
+        let s = core.settings.read().unwrap_or_else(|p| p.into_inner());
         (s.mascot_enabled, s.mic.clone())
     };
 
@@ -119,7 +143,7 @@ fn on_press(app: &AppHandle, core: &Arc<Core>) {
     let turn = mascot_on.then(|| mascot::show(app));
     match started {
         Ok(()) => {
-            *core.press.lock().unwrap() = Some(Press { started_at, target: paste::frontmost(), turn });
+            *lock(&core.press) = Some(Press { started_at, target: paste::frontmost(), turn });
             // Load the model while the user talks so release → paste is fast.
             let engine = core.engine.clone();
             std::thread::spawn(move || {
@@ -144,7 +168,7 @@ fn on_release(app: &AppHandle, core: Arc<Core>) {
     }
     // Stopping here (on the hotkey thread) means a quick next press finds the mic free.
     std::thread::sleep(TAIL);
-    let press = core.press.lock().unwrap().take();
+    let press = lock(&core.press).take();
     let recording = core.recorder.stop();
     let press = press.unwrap_or(Press { started_at: now_ms(), target: paste::Target::default(), turn: None });
     let recording = match recording {
@@ -161,10 +185,10 @@ fn on_release(app: &AppHandle, core: Arc<Core>) {
     let app = app.clone();
     std::thread::spawn(move || {
         {
+            let _job = JobGuard(&core.jobs);
             let _order = core.pipeline.lock().unwrap_or_else(|p| p.into_inner());
             complete(&app, &core, recording, press);
         }
-        core.jobs.fetch_sub(1, Ordering::SeqCst);
     });
 }
 
@@ -180,7 +204,7 @@ fn complete(app: &AppHandle, core: &Core, recording: Recording, press: Press) {
             mascot::swallow(app, t);
         }
     };
-    if recording.duration_ms < MIN_MS || recording.peak_rms < MIN_PEAK_RMS {
+    if is_ignorable(recording.duration_ms, recording.peak_rms) {
         log::info!("ignored: {} ms, peak {:.4}", recording.duration_ms, recording.peak_rms);
         swallow();
         return;
@@ -202,10 +226,16 @@ fn complete(app: &AppHandle, core: &Core, recording: Recording, press: Press) {
         Ok(raw) => {
             let rules = core.store.rules().unwrap_or_default();
             let text = crate::rules::apply(&raw, &rules);
+            if text.trim().is_empty() {
+                // A rule can erase everything (e.g. "um" -> ""): nothing to paste.
+                swallow();
+                return;
+            }
             // Cmd+V while the hotkey is held (the user already started the next
             // dictation) would read as a different key combo and cut that
             // recording. Paste once they let go; the queue keeps the order.
-            while core.recorder.is_recording() {
+            let waiting_since = Instant::now();
+            while core.recorder.is_recording() && waiting_since.elapsed() < MAX_PASTE_WAIT {
                 std::thread::sleep(Duration::from_millis(30));
             }
             let (pasted, restore) = paste::paste_text(&text, &press.target);
@@ -217,7 +247,7 @@ fn complete(app: &AppHandle, core: &Core, recording: Recording, press: Press) {
                 r.finish();
             }
             swallow();
-            let language = detect_language(&text, &core.settings.read().unwrap().language);
+            let language = detect_language(&text, &core.settings.read().unwrap_or_else(|p| p.into_inner()).language);
             NewDictation {
                 created_at: press.started_at,
                 duration_ms: recording.duration_ms,
@@ -253,7 +283,11 @@ fn complete(app: &AppHandle, core: &Core, recording: Recording, press: Press) {
 pub fn simulate(app: &AppHandle, wav: &std::path::Path) -> anyhow::Result<()> {
     let core = app.state::<Arc<Core>>().inner().clone();
     let mut reader = hound::WavReader::open(wav)?;
-    let samples: Vec<f32> = match reader.spec().sample_format {
+    let spec = reader.spec();
+    if spec.channels != 1 || spec.sample_rate != 16_000 {
+        anyhow::bail!("simulate needs a 16 kHz mono WAV (got {} ch, {} Hz)", spec.channels, spec.sample_rate);
+    }
+    let samples: Vec<f32> = match spec.sample_format {
         hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<_, _>>()?,
         hound::SampleFormat::Int => reader.samples::<i16>().map(|s| s.map(|v| v as f32 / 32768.0)).collect::<Result<_, _>>()?,
     };
@@ -299,9 +333,9 @@ fn detect_language(text: &str, setting: &str) -> Option<String> {
 pub fn spawn_idle_unloader(core: Arc<Core>) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(30));
-        let min = core.settings.read().unwrap().idle_unload_min;
+        let min = core.settings.read().unwrap_or_else(|p| p.into_inner()).idle_unload_min;
         if min > 0 && core.jobs.load(Ordering::SeqCst) == 0 && !core.recorder.is_recording() {
-            core.engine.unload_if_idle(Duration::from_secs(min as u64 * 60));
+            core.engine.unload_if_idle(Duration::from_secs(u64::from(min) * 60));
         }
     });
 }
@@ -322,5 +356,50 @@ mod tests {
             detect_language("I need to finish the quarterly report before the meeting tomorrow", "auto").as_deref(),
             Some("en")
         );
+    }
+
+    #[test]
+    fn short_quiet_or_nan_recordings_are_ignored() {
+        assert!(is_ignorable(100, 0.5));
+        assert!(is_ignorable(299, 0.5));
+        assert!(!is_ignorable(300, 0.5));
+        assert!(is_ignorable(1000, 0.0));
+        assert!(is_ignorable(1000, 0.0099));
+        assert!(!is_ignorable(1000, 0.01));
+        assert!(is_ignorable(1000, f32::NAN));
+        assert!(is_ignorable(0, 0.0));
+        assert!(is_ignorable(-5, 1.0));
+    }
+
+    #[test]
+    fn job_guard_decrements_even_on_panic() {
+        let n = Arc::new(AtomicUsize::new(1));
+        let n2 = n.clone();
+        let r = std::thread::spawn(move || {
+            let _g = JobGuard(&n2);
+            panic!("pipeline blew up");
+        })
+        .join();
+        assert!(r.is_err());
+        assert_eq!(n.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn detection_handles_empty_and_symbols() {
+        assert_eq!(detect_language("", "auto"), None);
+        assert_eq!(detect_language("12345 !!! ???", "auto"), None);
+        assert_eq!(detect_language("", "es").as_deref(), Some("es"));
+    }
+
+    #[test]
+    fn lock_survives_poisoning() {
+        let m = Arc::new(Mutex::new(5));
+        let m2 = m.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = m2.lock().unwrap();
+            panic!("x");
+        })
+        .join();
+        assert_eq!(*lock(&m), 5);
     }
 }

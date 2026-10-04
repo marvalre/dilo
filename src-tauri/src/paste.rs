@@ -36,15 +36,32 @@ impl Restore {
 /// Pastes `text` into `target` and returns the pending clipboard restore.
 /// The restore still happens (via the returned value) when the key press fails.
 pub fn paste_text(text: &str, target: &Target) -> (Result<()>, Option<Restore>) {
+    let Some(payload) = clipboard_payload(text) else {
+        return (Ok(()), None); // nothing to paste: leave the clipboard alone
+    };
     refocus(target);
     let saved = clip::snapshot();
-    let ours = match clip::set_text(&format!("{text} ")) {
+    let ours = match clip::set_text(&payload) {
         Ok(n) => n,
-        Err(e) => return (Err(e), None),
+        Err(e) => {
+            // A failed write may still have cleared the user's clipboard.
+            clip::restore(saved);
+            return (Err(e), None);
+        }
     };
     sleep(Duration::from_millis(40));
     let pasted = press_paste();
     (pasted, Some(Restore { saved, ours, at: Instant::now() }))
+}
+
+/// What goes on the clipboard: the text plus a trailing space so consecutive
+/// dictations don't glue together. None when there is nothing to paste.
+fn clipboard_payload(text: &str) -> Option<String> {
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(format!("{text} "))
+    }
 }
 
 /// If the user switched apps while we transcribed, go back to where they dictated.
@@ -220,20 +237,75 @@ mod clip {
 #[cfg(not(target_os = "macos"))]
 mod clip {
     use anyhow::Result;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::sync::Mutex;
+
     pub struct Snapshot(Option<String>);
-    pub fn snapshot() -> Snapshot {
-        Snapshot(arboard::Clipboard::new().ok().and_then(|mut c| c.get_text().ok()))
+
+    /// On Linux/X11 the clipboard content lives in the process that set it and
+    /// vanishes when the `Clipboard` is dropped, before the target app has pasted.
+    /// One long-lived handle keeps serving it.
+    static HANDLE: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
+
+    fn with<R>(f: impl FnOnce(&mut arboard::Clipboard) -> Result<R>) -> Result<R> {
+        let mut g = HANDLE.lock().unwrap_or_else(|p| p.into_inner());
+        if g.is_none() {
+            *g = Some(arboard::Clipboard::new()?);
+        }
+        let r = f(g.as_mut().expect("just set"));
+        if r.is_err() {
+            *g = None; // reconnect next time
+        }
+        r
     }
+
+    fn fingerprint(text: Option<&str>) -> isize {
+        let mut h = DefaultHasher::new();
+        text.hash(&mut h);
+        h.finish() as isize
+    }
+
+    pub fn snapshot() -> Snapshot {
+        Snapshot(with(|c| Ok(c.get_text()?)).ok())
+    }
+    /// Returns a fingerprint of the clipboard text, standing in for a change count.
     pub fn set_text(text: &str) -> Result<isize> {
-        arboard::Clipboard::new()?.set_text(text.to_string())?;
-        Ok(0)
+        with(|c| Ok(c.set_text(text.to_string())?))?;
+        Ok(fingerprint(Some(text)))
     }
     pub fn restore(s: Snapshot) {
-        if let (Some(t), Ok(mut c)) = (s.0, arboard::Clipboard::new()) {
-            let _ = c.set_text(t);
+        if let Some(t) = s.0 {
+            let _ = with(|c| Ok(c.set_text(t)?));
         }
     }
     pub fn change_count() -> isize {
-        0
+        let now = with(|c| Ok(c.get_text()?)).ok();
+        fingerprint(now.as_deref())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payload_adds_trailing_space_and_skips_blank() {
+        assert_eq!(clipboard_payload("hola").as_deref(), Some("hola "));
+        assert_eq!(clipboard_payload("ñandú 🙂\nlínea").as_deref(), Some("ñandú 🙂\nlínea "));
+        assert_eq!(clipboard_payload(""), None);
+        assert_eq!(clipboard_payload("  \n\t"), None);
+    }
+
+    #[test]
+    fn blank_text_never_touches_clipboard_or_keys() {
+        let (r, restore) = paste_text("   ", &Target::default());
+        assert!(r.is_ok());
+        assert!(restore.is_none());
+    }
+
+    #[test]
+    fn default_target_has_no_pid() {
+        assert!(Target::default().pid.is_none());
     }
 }
