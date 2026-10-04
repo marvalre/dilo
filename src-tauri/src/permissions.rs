@@ -4,15 +4,17 @@
 mod mac {
     use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
 
-    pub fn status() -> AVAuthorizationStatus {
-        unsafe { AVCaptureDevice::authorizationStatusForMediaType(AVMediaTypeAudio.expect("AVMediaTypeAudio")) }
+    /// None if the AVFoundation audio media type symbol is unavailable.
+    pub fn status() -> Option<AVAuthorizationStatus> {
+        let media = unsafe { AVMediaTypeAudio }?;
+        Some(unsafe { AVCaptureDevice::authorizationStatusForMediaType(media) })
     }
 }
 
 pub fn microphone_granted() -> bool {
     #[cfg(target_os = "macos")]
     {
-        mac::status() == objc2_av_foundation::AVAuthorizationStatus::Authorized
+        mac::status() == Some(objc2_av_foundation::AVAuthorizationStatus::Authorized)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -24,7 +26,7 @@ pub fn microphone_granted() -> bool {
 pub fn request_or_open_microphone() {
     #[cfg(target_os = "macos")]
     {
-        if mac::status() == objc2_av_foundation::AVAuthorizationStatus::NotDetermined {
+        if mac::status() == Some(objc2_av_foundation::AVAuthorizationStatus::NotDetermined) {
             let rec = crate::recorder::Recorder::default();
             if rec.start(None, std::sync::Arc::new(|_| {})).is_ok() {
                 let _ = rec.stop();

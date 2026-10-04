@@ -67,6 +67,9 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                 if let Err(e) = crate::commands::update_settings(app, &core, |s| s.language = code) {
                     log::error!("language: {e}");
                 }
+                // The OS already toggled the check mark on click; redraw from the real setting
+                // (also covers clicking the current language, which would otherwise uncheck it).
+                refresh(app);
             }
         })
         .on_tray_icon_event(|tray, event| {

@@ -77,7 +77,10 @@ fn migrate_from_dicta(new_dir: &std::path::Path) {
     if std::fs::rename(&old_dir, new_dir).is_err() {
         return;
     }
-    let _ = std::fs::rename(new_dir.join("dicta.db"), new_dir.join("dilo.db"));
+    // SQLite sidecar files (WAL/SHM) must follow the database or recent rows are lost.
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let _ = std::fs::rename(new_dir.join(format!("dicta.db{suffix}")), new_dir.join(format!("dilo.db{suffix}")));
+    }
     if let Some(home) = std::env::var_os("HOME") {
         let _ = std::fs::remove_file(std::path::Path::new(&home).join("Library/LaunchAgents/Dicta.plist"));
     }

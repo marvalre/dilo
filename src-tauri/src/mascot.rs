@@ -248,7 +248,8 @@ mod tests {
     #[test]
     fn flips_at_right_and_bottom_edges() {
         let (x, y) = place(990.0, 790.0, 128.0, 48.0, 26.0, Some(R));
-        assert_eq!((x, y), (990.0 - 48.0 - 64.0, 790.0 - 26.0 - 64.0));
+        // Flipped position would still poke out by a few px, so it is clamped inside.
+        assert_eq!((x, y), (1000.0 - 128.0, 800.0 - 128.0));
         assert!(x + 128.0 <= 1000.0 && y + 128.0 <= 800.0);
     }
 
@@ -277,7 +278,7 @@ mod tests {
         assert_eq!(monitor_at(&ms, -5.0, 10.0).unwrap().0, a);
         assert_eq!(monitor_at(&ms, 5.0, 10.0).unwrap().0, b);
         // Below monitor a (outside every monitor): nearest wins.
-        assert_eq!(monitor_at(&ms, -100.0, 1200.0).unwrap().0, a);
+        assert_eq!(monitor_at(&ms, -1000.0, 1200.0).unwrap().0, a);
         assert!(monitor_at(&[], 0.0, 0.0).is_none());
     }
 

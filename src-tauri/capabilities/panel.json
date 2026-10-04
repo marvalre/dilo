@@ -6,7 +6,9 @@
     "panel"
   ],
   "permissions": [
-    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:app:allow-version",
     "allow-get-history",
     "allow-update-dictation",
     "allow-clear-history",
