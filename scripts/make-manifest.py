@@ -5,6 +5,9 @@ Reads the signature from src-tauri/target/release/bundle/macos/Dilo.app.tar.gz.s
 import json, sys, datetime, pathlib
 version, base_url, notes_file, out = sys.argv[1:5]
 root = pathlib.Path(__file__).resolve().parent.parent
+sigfile = root / "src-tauri/target/release/bundle/macos/Dilo.app.tar.gz.sig"
+if not sigfile.exists():
+    sys.exit(f"missing {sigfile}: build with TAURI_SIGNING_PRIVATE_KEY set")
 sig = (root / "src-tauri/target/release/bundle/macos/Dilo.app.tar.gz.sig").read_text().strip()
 notes = "" if notes_file == "-" else pathlib.Path(notes_file).read_text().strip()
 url = f"{base_url.rstrip('/')}/Dilo.app.tar.gz"

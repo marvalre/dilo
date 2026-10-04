@@ -14,6 +14,18 @@ KEY="$HOME/.tauri/dilo-updater.key"
 [ -f "$KEY" ] || { echo "Falta la llave de firma $KEY" >&2; exit 1; }
 VERSION="$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])")"
 TAG="v$VERSION"
+# The three version numbers must agree, otherwise the updater/manifest ship the wrong version.
+CARGO_V="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n1)"
+PKG_V="$(python3 -c "import json;print(json.load(open('package.json'))['version'])")"
+if [ "$CARGO_V" != "$VERSION" ] || [ "$PKG_V" != "$VERSION" ]; then
+  echo "Versiones distintas: tauri.conf=$VERSION Cargo.toml=$CARGO_V package.json=$PKG_V" >&2; exit 1
+fi
+if [ "${1:-}" = "--publish" ] && git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+  echo "El tag $TAG ya existe; sube la versión." >&2; exit 1
+fi
+if [ -f release-notes.md ] && ! grep -q "$VERSION" release-notes.md; then
+  echo "Ojo: release-notes.md no menciona $VERSION; ¿son notas viejas?" >&2
+fi
 export TAURI_SIGNING_PRIVATE_KEY="$KEY" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 export PATH="$HOME/.cargo/bin:$PATH"
 PREFERRED="SonarLab Local Development"

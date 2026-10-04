@@ -24,7 +24,7 @@ Our twist: a **cute mascot ("el monito")** — a small cream ball with two dot e
 | Stack | Tauri v2 (Rust core + React/TS webviews), bun as JS package manager |
 | Relation to Handy (github.com/cjpais/Handy, MIT, 32k★) | We did NOT fork. We use its published crates `transcribe-rs` (engine) and `handy-keys` (global hotkey). Handy's name/logo may NOT be used. README must credit Handy. |
 | Engine | Parakeet v3 via `transcribe-rs` feature `onnx`. Auto-detects 25 European languages incl. es/en mixing. |
-| RAM | Model loaded lazily (preloaded on key press) and unloaded after N idle minutes (default 10). |
+| RAM | Model loaded lazily (preloaded on key press) and unloaded after N idle minutes (default 2 min, setting `idle_unload_min`). |
 | Mascot | Only waves as mouth (no live text). Design in spec §4. |
 | Paste | clipboard save → set → Cmd/Ctrl+V → restore after 300 ms |
 | Storage | SQLite `dilo.db` in app data dir |
@@ -37,7 +37,7 @@ Plan: `docs/superpowers/plans/2026-09-28-dicta-v1.md`
 Owner dictated with it successfully, then asked for:
 1. Mascot much smaller + "pro/Apple" look. References: Clicky (tiny cursor buddy) and Meta Muse's mascot "Jolly"
    (beady oval eyes, minimal smile). Mouth must be **sound-wave BARS** (like Siri/Voice Memos), not a sine line.
-   → 4 skins in `src/shared/MascotFace.tsx`: **glass (default)**, jolly, dot, aura; sizes s/m/l (m ≈ 26–30 px).
+   → 5 skins in `src/shared/MascotFace.tsx`: wave, **glass (default)**, jolly, dot, aura; sizes s/m/l (m ≈ 26–30 px).
 2. A real app window "like Wispr Flow": sidebar (Inicio, Historial, Diccionario, Monito, Ajustes), shows in Dock while open.
 3. Editable: history texts, personal dictionary (corrections), shortcuts (say X → paste Y), mascot appearance.
 4. Storage bar on Home (model + history) with a warning threshold (setting `storage_warn_mb`).
@@ -108,7 +108,7 @@ Mascot preview in a normal browser (no Tauri needed — it runs a demo cycling a
 - Transcription: 5.5 s Spanish audio in ~0.17–0.19 s; 4.0 s English in ~0.13–0.23 s. Perfect text on fixtures (punctuation, "a las 5").
 - **Engine runs in a WORKER PROCESS** (`dilo --engine-worker <model_dir>`, see engine.rs header for the stdin/stdout protocol).
   Why: freeing the model in-process left ~500 MB retained by the allocator. Killing the worker returns 100%.
-- App process RSS: ~85 MB idle, ~93 MB during use. Worker RSS while alive: ~1.37 GB. Worker starts in ~0.9 s (started on key press, so it loads while the user talks) and is killed after `idle_unload_min` (default 5).
+- App process RSS: ~85 MB idle, ~93 MB during use. Worker RSS while alive: ~1.37 GB. Worker starts in ~0.9 s (started on key press, so it loads while the user talks) and is killed after `idle_unload_min` (default 2).
 - Idea to cut worker RAM (~1.37 GB): Handy now ships a GGUF Q4_K_M Parakeet (485 MB) run via `transcribe-cpp` (ggml, mmap). Switching the worker to that could roughly halve RAM. ORT session options are not exposed by transcribe-rs 0.3.11 (session.rs uses Level3 + defaults).
 - E2E verified with `DILO_SIMULATE_WAV=<16k wav> Dilo.app/Contents/MacOS/dilo`: mascot shows, text transcribed, pasted into the frontmost app, row saved in dilo.db. NOTE: it pastes into whatever app is frontmost — beware when testing.
 
@@ -137,7 +137,8 @@ In progress / next:
 - [ ] **Human test**: open Dilo.app, grant Accessibility + Microphone, set 🌐 key to "Do nothing", hold Fn in TextEdit, speak, release. (Real mic + real Fn not yet tested by a human.)
 - [ ] Visual check of the panel inside the real app (it was checked in a browser with mocked data only).
 - [ ] Windows/Linux: paste quirks (see Handy `src-tauri/src/paste_tx/windows.rs`), enigo cursor coordinates are physical pixels on Windows (mascot.rs assumes logical points), tray icon behavior.
-- [ ] Launch at login (tauri-plugin-autostart), auto-update, signing/notarization.
+- [x] Launch at login, in-app auto-update (signed, `scripts/release.sh`). Repo for releases: marvalre/dilo.
+- [ ] Apple notarization (needs paid Developer ID); updater only serves darwin-aarch64; no CI; no Intel/Windows/Linux builds.
 - [ ] Final name + logo (owner decides).
 
 ## 8. Gotchas
