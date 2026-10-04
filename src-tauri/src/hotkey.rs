@@ -23,11 +23,9 @@ pub fn validate(hotkey: &str) -> Result<(), String> {
 
 pub fn spawn(hotkey: &str, on_event: impl Fn(bool) + Send + 'static) -> Result<HotkeyHandle> {
     let (tx, rx) = mpsc::channel::<String>();
-    let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
     let initial = hotkey.to_string();
 
     std::thread::Builder::new().name("hotkey".into()).spawn(move || {
-        let _ = ready_tx.send(Ok(()));
         // Without Accessibility permission the manager can't start. Keep retrying so
         // the key starts working as soon as the user grants it — no restart needed.
         let mut warned = false;
@@ -47,29 +45,64 @@ pub fn spawn(hotkey: &str, on_event: impl Fn(bool) + Send + 'static) -> Result<H
         while let Ok(next) = rx.try_recv() {
             pending = Some(next); // key changed while waiting for permission
         }
+        // What is currently active: the key string, its registration (None in polling
+        // mode) and the modifiers to poll (None when registered with the manager).
+        let mut active: Option<String> = None;
         let mut current: Option<HotkeyId> = None;
         let mut poll: Option<Modifiers> = None;
-        let activate = |hotkey: &str, current: &mut Option<HotkeyId>, poll: &mut Option<Modifiers>| {
-            if let Some(id) = current.take() {
-                let _ = manager.unregister(id);
+        // Switches to `hotkey`. If the new key can't be registered the previous one
+        // stays active, so a bad setting never leaves the user without a hotkey.
+        let activate = |hotkey: &str,
+                        active: &mut Option<String>,
+                        current: &mut Option<HotkeyId>,
+                        poll: &mut Option<Modifiers>| {
+            if active.as_deref() == Some(hotkey) {
+                return;
             }
-            *poll = modifier_only(hotkey);
-            if poll.is_some() {
+            if let Some(mods) = modifier_only(hotkey) {
+                if let Some(id) = current.take() {
+                    let _ = manager.unregister(id);
+                }
+                *poll = Some(mods);
+                *active = Some(hotkey.to_string());
                 log::info!("hotkey registered: {hotkey} (physical state)");
+            } else if let Some(id) = register(&manager, hotkey) {
+                if let Some(old) = current.replace(id) {
+                    let _ = manager.unregister(old);
+                }
+                *poll = None;
+                *active = Some(hotkey.to_string());
             } else {
-                *current = register(&manager, hotkey);
+                log::error!("hotkey {hotkey} not usable; keeping {:?}", active);
             }
         };
-        activate(pending.as_deref().unwrap_or(&initial), &mut current, &mut poll);
+        activate(pending.as_deref().unwrap_or(&initial), &mut active, &mut current, &mut poll);
         let mut held = false;
         loop {
-            if let Ok(next) = rx.try_recv() {
-                activate(&next, &mut current, &mut poll);
-                if held {
-                    // The old key is no longer watched, so its release will never arrive.
-                    held = false;
-                    on_event(false);
+            match rx.try_recv() {
+                Ok(mut next) => {
+                    while let Ok(newer) = rx.try_recv() {
+                        next = newer;
+                    }
+                    let before = active.clone();
+                    activate(&next, &mut active, &mut current, &mut poll);
+                    if held && active != before {
+                        // The old key is no longer watched, so its release will never arrive.
+                        held = false;
+                        on_event(false);
+                    }
                 }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    // The handle was dropped: stop watching, and never leave a press dangling.
+                    if let Some(id) = current.take() {
+                        let _ = manager.unregister(id);
+                    }
+                    if held {
+                        on_event(false);
+                    }
+                    return;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
             }
             while let Some(ev) = manager.try_recv() {
                 if poll.is_some() {
@@ -87,7 +120,7 @@ pub fn spawn(hotkey: &str, on_event: impl Fn(bool) + Send + 'static) -> Result<H
             // send modifier changes while the key is held.
             if let Some(mods) = poll {
                 if let Some(state) = physical::state(mods) {
-                    let next = if held { state.required } else { state.required && !state.others };
+                    let next = next_held(held, state.required, state.others);
                     if next != held {
                         held = next;
                         on_event(next);
@@ -98,8 +131,18 @@ pub fn spawn(hotkey: &str, on_event: impl Fn(bool) + Send + 'static) -> Result<H
         }
     })?;
 
-    ready_rx.recv()?.map_err(anyhow::Error::msg)?;
     Ok(HotkeyHandle { tx })
+}
+
+/// Edge detection for modifier-only keys: starting needs exactly the hotkey's
+/// modifiers (so Cmd+Fn doesn't trigger "Fn"), but once held it only needs to
+/// keep them down, so adding another modifier mid-dictation doesn't cut it off.
+fn next_held(held: bool, required: bool, others: bool) -> bool {
+    if held {
+        required
+    } else {
+        required && !others
+    }
 }
 
 /// The modifiers of a hotkey that has no regular key, where we can poll the keyboard.
@@ -187,7 +230,8 @@ fn register(manager: &HotkeyManager, hotkey: &str) -> Option<HotkeyId> {
 /// Records the next key or combination the user presses and returns it in
 /// handy-keys syntax ("Fn", "CtrlRight", "Cmd+Shift+D"). None on Escape/timeout.
 pub fn capture(timeout: Duration) -> Result<Option<String>> {
-    use handy_keys::{Key, KeyboardListener, Modifiers};
+    use handy_keys::KeyboardListener;
+    // The listener is dropped on every exit path, which stops its event tap.
     let listener = KeyboardListener::new().map_err(|e| anyhow::anyhow!("{e}"))?;
     let deadline = std::time::Instant::now() + timeout;
     // Largest set of modifiers held so far, for modifier-only hotkeys like "Fn".
@@ -199,25 +243,54 @@ pub fn capture(timeout: Duration) -> Result<Option<String>> {
             return Ok(None);
         }
         let Ok(ev) = listener.recv_timeout(left) else { return Ok(None) };
-        match ev.key {
-            Some(Key::Escape) if ev.is_key_down => return Ok(None),
-            // A bare letter, digit or space would start dictating on every keystroke.
-            Some(key) if ev.is_key_down && ev.modifiers.is_empty() && is_typing_key(&key) => {}
-            Some(key) if ev.is_key_down => {
-                let mods = generic_sides(ev.modifiers);
-                let hotkey = Hotkey::new(mods, Some(key)).map_err(|e| anyhow::anyhow!("{e}"))?;
-                return Ok(Some(format_hotkey(&hotkey)));
-            }
-            _ => {}
-        }
-        if ev.modifiers.bits().count_ones() > best.bits().count_ones() {
-            best = ev.modifiers;
-        }
-        if ev.modifiers.is_empty() && !best.is_empty() {
-            let hotkey = Hotkey::new(best, None).map_err(|e| anyhow::anyhow!("{e}"))?;
-            return Ok(Some(format_hotkey(&hotkey)));
+        match capture_step(&mut best, ev.key, ev.is_key_down, ev.modifiers) {
+            CaptureStep::Continue => {}
+            CaptureStep::Cancel => return Ok(None),
+            CaptureStep::Done(hotkey) => return Ok(Some(format_hotkey(&hotkey))),
+            CaptureStep::Invalid(e) => return Err(anyhow::anyhow!("{e}")),
         }
     }
+}
+
+#[derive(Debug, PartialEq)]
+enum CaptureStep {
+    Continue,
+    Cancel,
+    Done(Hotkey),
+    Invalid(String),
+}
+
+/// One event of the capture state machine (pure, so it can be tested).
+fn capture_step(best: &mut Modifiers, key: Option<handy_keys::Key>, is_down: bool, mods: Modifiers) -> CaptureStep {
+    use handy_keys::Key;
+    match key {
+        Some(Key::Escape) if is_down => return CaptureStep::Cancel,
+        // A bare letter, digit or space would start dictating on every keystroke;
+        // so would Shift/Option + letter, which type capitals and accents.
+        Some(key) if is_down && is_typing_key(&key) && !has_command_modifier(mods) => {}
+        Some(key) if is_down => {
+            return match Hotkey::new(generic_sides(mods), Some(key)) {
+                Ok(h) => CaptureStep::Done(h),
+                Err(e) => CaptureStep::Invalid(e.to_string()),
+            };
+        }
+        _ => {}
+    }
+    if mods.bits().count_ones() > best.bits().count_ones() {
+        *best = mods;
+    }
+    if mods.is_empty() && !best.is_empty() {
+        return match Hotkey::new(*best, None) {
+            Ok(h) => CaptureStep::Done(h),
+            Err(e) => CaptureStep::Invalid(e.to_string()),
+        };
+    }
+    CaptureStep::Continue
+}
+
+/// Ctrl, Cmd/Win or Fn: modifiers that don't change which character a key types.
+fn has_command_modifier(m: Modifiers) -> bool {
+    m.intersects(Modifiers::CTRL | Modifiers::CMD | Modifiers::FN)
 }
 
 fn is_typing_key(key: &handy_keys::Key) -> bool {
@@ -333,6 +406,52 @@ mod tests {
         assert!(s.required && !s.others);
         let s = super::physical::evaluate(M::CMD, 0x10);
         assert!(s.required, "compound Cmd accepts right side");
+    }
+
+    #[test]
+    fn modifier_hold_edges() {
+        use super::next_held;
+        assert!(next_held(false, true, false), "exact modifiers start");
+        assert!(!next_held(false, true, true), "extra modifier blocks the start");
+        assert!(next_held(true, true, true), "extra modifier doesn't cut a held key");
+        assert!(!next_held(true, false, false), "releasing stops");
+        assert!(!next_held(false, false, false));
+    }
+
+    #[test]
+    fn capture_modifier_only_returns_on_release() {
+        use super::{capture_step, CaptureStep};
+        use handy_keys::{Hotkey, Modifiers as M};
+        let mut best = M::empty();
+        assert_eq!(capture_step(&mut best, None, true, M::FN), CaptureStep::Continue);
+        assert_eq!(capture_step(&mut best, None, true, M::FN | M::SHIFT_LEFT), CaptureStep::Continue);
+        // Releasing one at a time keeps the largest set seen.
+        assert_eq!(capture_step(&mut best, None, false, M::FN), CaptureStep::Continue);
+        let done = capture_step(&mut best, None, false, M::empty());
+        assert_eq!(done, CaptureStep::Done(Hotkey::new(M::FN | M::SHIFT_LEFT, None).unwrap()));
+    }
+
+    #[test]
+    fn capture_regular_keys() {
+        use super::{capture_step, CaptureStep};
+        use handy_keys::{Hotkey, Key, Modifiers as M};
+        let mut best = M::empty();
+        assert_eq!(capture_step(&mut best, Some(Key::Escape), true, M::empty()), CaptureStep::Cancel);
+        // Bare letters and Shift/Option + letter would hijack typing.
+        assert_eq!(capture_step(&mut best, Some(Key::A), true, M::empty()), CaptureStep::Continue);
+        assert_eq!(capture_step(&mut best, Some(Key::A), true, M::SHIFT_LEFT), CaptureStep::Continue);
+        assert_eq!(capture_step(&mut best, Some(Key::A), true, M::OPT_RIGHT), CaptureStep::Continue);
+        // Key-up of a regular key is not a capture.
+        let mut fresh = M::empty();
+        assert_eq!(capture_step(&mut fresh, Some(Key::F5), false, M::empty()), CaptureStep::Continue);
+        assert_eq!(
+            capture_step(&mut fresh, Some(Key::F5), true, M::empty()),
+            CaptureStep::Done(Hotkey::new(M::empty(), Some(Key::F5)).unwrap())
+        );
+        assert_eq!(
+            capture_step(&mut fresh, Some(Key::D), true, M::CMD_RIGHT | M::SHIFT_LEFT),
+            CaptureStep::Done(Hotkey::new(M::CMD | M::SHIFT, Some(Key::D)).unwrap())
+        );
     }
 
     #[test]
