@@ -136,9 +136,27 @@ export function ConfirmDialog({
   useEffect(() => {
     // Destructive actions default to the safe button.
     (destructiveRef.current ? cancelBtn : confirmBtn).current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && cancelRef.current();
+    const prev = document.activeElement as HTMLElement | null;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") cancelRef.current();
+      else if (e.key === "Tab") {
+        // Two-button trap: keep focus inside the dialog.
+        const a = cancelBtn.current;
+        const b = confirmBtn.current;
+        if (!a || !b) return;
+        const first = e.shiftKey ? a : b;
+        const last = e.shiftKey ? b : a;
+        if (document.activeElement === first || !(document.activeElement === a || document.activeElement === b)) {
+          e.preventDefault();
+          last.focus();
+        }
+      }
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      prev?.focus?.();
+    };
   }, []);
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>

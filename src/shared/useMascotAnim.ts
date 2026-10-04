@@ -12,7 +12,10 @@ export function useMascotAnim(mode: Mode, target: { current: number }, running =
   const blinkUntil = useRef(0);
 
   useEffect(() => {
-    if (!running) return;
+    if (!running) {
+      level.current = 0;
+      return;
+    }
     let raf = 0;
     let nextBlink = performance.now() + 2500 + Math.random() * 2500;
     const tick = (t: number) => {

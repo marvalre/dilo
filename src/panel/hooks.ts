@@ -108,10 +108,15 @@ export function useTodayKey(): string {
 
 export function useModelStatus(): ModelStatus | null {
   const [m, setM] = useState<ModelStatus | null>(null);
+  const gotEvent = useRef(false);
   useEffect(() => {
-    api.modelStatus().then(setM).catch(() => {});
+    // An event that arrives while the initial invoke is in flight is newer; don't overwrite it.
+    api.modelStatus().then((s) => { if (!gotEvent.current) setM(s); }).catch(() => {});
   }, []);
-  useTauriEvent(events.onModelStatus, setM);
+  useTauriEvent(events.onModelStatus, (s: ModelStatus) => {
+    gotEvent.current = true;
+    setM(s);
+  });
   return m;
 }
 
@@ -160,7 +165,10 @@ export function useUpdate() {
     setInfo(u);
     setPhase((p) => (p === "downloading" ? p : "available"));
   });
-  useTauriEvent(events.onUpdateProgress, (p: { done: number; total: number }) => setProgress(p));
+  useTauriEvent(events.onUpdateProgress, (p: { done: number; total: number }) => {
+    setProgress(p);
+    setPhase("downloading"); // an install started elsewhere (or before this view mounted)
+  });
 
   const check = useCallback(async () => {
     setError(null);

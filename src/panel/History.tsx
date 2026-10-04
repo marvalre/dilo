@@ -35,6 +35,13 @@ export default function History() {
   const today = useTodayKey();
 
   useEffect(() => {
+    if (!menu) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenu(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menu]);
+
+  useEffect(() => {
     const t = window.setTimeout(() => setQuery(input.trim()), 200);
     return () => window.clearTimeout(t);
   }, [input]);
@@ -215,6 +222,7 @@ export default function History() {
             <input
               type="search"
               placeholder="Buscar en el historial"
+              aria-label="Buscar en el historial"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Escape" && !e.nativeEvent.isComposing && e.keyCode !== 229 && setInput("")}
@@ -381,6 +389,7 @@ function HistoryRow({
         <div className="row-body">
           <AutoTextarea
             className="edit-area"
+            aria-label="Editar texto del dictado"
             value={draft}
             autoFocusEnd
             onChange={(e) => setDraft(e.target.value)}

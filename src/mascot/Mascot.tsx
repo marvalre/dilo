@@ -25,13 +25,19 @@ export function Mascot() {
     invoke<Look>("get_settings").then(setLook).catch(() => {});
     const subs = [
       listen<State>("mascot://state", (e) => {
-        if (e.payload === "listening") invoke<Look>("get_settings").then(setLook).catch(() => {});
+        if (e.payload === "listening") {
+          target.current = 0;
+          invoke<Look>("get_settings").then(setLook).catch(() => {});
+        }
         setState(e.payload);
       }),
-      listen<number>("mascot://level", (e) => (target.current = e.payload)),
+      listen<number>("mascot://level", (e) => {
+        const v = Number(e.payload);
+        target.current = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
+      }),
       listen<Look>("settings://changed", (e) => setLook(e.payload)),
     ];
-    return () => subs.forEach((s) => s.then((f) => f()));
+    return () => subs.forEach((s) => s.then((f) => f()).catch(() => {}));
   }, []);
 
   if (state !== "hidden" && state !== "swallow") lastMode.current = state;

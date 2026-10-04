@@ -114,6 +114,7 @@ export default function SettingsPage() {
               </option>
             ))}
             <option value="auto">Automático</option>
+            {settings.language !== "auto" && !LANGS.includes(settings.language) && <option value={settings.language}>{langName(settings.language)}</option>}
             <option disabled>──────────</option>
             {LANGS.slice(2).map((c) => (
               <option key={c} value={c}>
@@ -214,7 +215,7 @@ function HotkeyRow({ hotkey, onSave }: { hotkey: string; onSave: (h: string) => 
     <div className="grow">
       <div className="grow-label">
         <span>Tecla para dictar</span>
-        <span className="grow-sub">
+        <span className="grow-sub" aria-live="polite">
           {capturing ? "Presiona la tecla o combinación… (Esc para cancelar)" : "Mantenla presionada mientras hablas y suéltala para pegar."}
         </span>
         {err && <span className="grow-sub error-text">{err}</span>}
@@ -275,7 +276,7 @@ function ModelRow() {
 function PermissionsGroup() {
   const [p, setP] = useState<Permissions | null>(null);
   useEffect(() => {
-    const poll = () => api.permissions().then(setP).catch(() => {});
+    const poll = () => (document.hidden ? undefined : api.permissions().then(setP).catch(() => {}));
     poll();
     const id = window.setInterval(poll, 2000);
     return () => window.clearInterval(id);

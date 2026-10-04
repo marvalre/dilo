@@ -25,6 +25,7 @@ export default function Dictionary() {
   const [kind, setKind] = useState<RuleKind>("correction");
   const [rules, setRules] = useState<Rule[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
 
   useEffect(() => {
     api.rules().then(setRules, (e) => setError(errMsg(e)));
@@ -38,6 +39,11 @@ export default function Dictionary() {
 
   const save = async (r: Rule | (Omit<Rule, "id"> & { id: null })) => {
     setError(null);
+    const dup = (rules ?? []).some((x) => x.id !== r.id && x.kind === r.kind && x.from.trim().toLowerCase() === r.from.trim().toLowerCase());
+    if (dup) {
+      setError(`Ya existe una regla para «${r.from}».`);
+      return false;
+    }
     try {
       upsert(await api.saveRule(r));
       return true;
@@ -60,7 +66,9 @@ export default function Dictionary() {
   };
 
   const c = COPY[kind];
-  const list = (rules ?? []).filter((r) => r.kind === kind);
+  const needle = filter.trim().toLowerCase();
+  const all = (rules ?? []).filter((r) => r.kind === kind);
+  const list = needle ? all.filter((r) => r.from.toLowerCase().includes(needle) || r.to.toLowerCase().includes(needle)) : all;
 
   return (
     <>
@@ -68,7 +76,11 @@ export default function Dictionary() {
         <Segmented
           label="Tipo de regla"
           value={kind}
-          onChange={setKind}
+          onChange={(k) => {
+            setKind(k);
+            setFilter("");
+            setError(null);
+          }}
           options={[
             { value: "correction", label: "Correcciones" },
             { value: "shortcut", label: "Atajos" },
@@ -83,10 +95,23 @@ export default function Dictionary() {
 
       {error && <p className="error-text">{error}</p>}
 
+      {all.length > 8 && (
+        <input
+          type="search"
+          className="field"
+          style={{ marginBottom: 12 }}
+          placeholder="Buscar en las reglas"
+          aria-label="Buscar en las reglas"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          spellCheck={false}
+        />
+      )}
+
       {rules && list.length === 0 ? (
         <div className="empty small-empty">
-          <p className="empty-title">{c.emptyTitle}</p>
-          <p className="empty-text">{c.emptyText}</p>
+          <p className="empty-title">{all.length > 0 ? "Sin resultados" : c.emptyTitle}</p>
+          <p className="empty-text">{all.length > 0 ? `Ninguna regla contiene “${filter.trim()}”.` : c.emptyText}</p>
         </div>
       ) : (
         list.length > 0 && (
@@ -174,6 +199,12 @@ function RuleRow({
   const [editing, setEditing] = useState(false);
   const [from, setFrom] = useState(r.from);
   const [to, setTo] = useState(r.to);
+  useEffect(() => {
+    if (!editing) {
+      setFrom(r.from);
+      setTo(r.to);
+    }
+  }, [r.from, r.to, editing]);
 
   const cancel = () => {
     setFrom(r.from);
@@ -196,14 +227,14 @@ function RuleRow({
   if (editing) {
     return (
       <div className="rule rule-editing">
-        <input className="field" value={from} onChange={(e) => setFrom(e.target.value)} onKeyDown={keys} autoFocus spellCheck={false} />
+        <input className="field" aria-label={r.kind === "shortcut" ? "Cuando digo" : "Escuchado"} value={from} onChange={(e) => setFrom(e.target.value)} onKeyDown={keys} autoFocus spellCheck={false} />
         <span className="add-arrow" aria-hidden>
           <ArrowIcon />
         </span>
         {r.kind === "shortcut" ? (
-          <AutoTextarea className="field" value={to} onChange={(e) => setTo(e.target.value)} onKeyDown={keys} spellCheck={false} />
+          <AutoTextarea className="field" aria-label="Pegar" value={to} onChange={(e) => setTo(e.target.value)} onKeyDown={keys} spellCheck={false} />
         ) : (
-          <input className="field" value={to} onChange={(e) => setTo(e.target.value)} onKeyDown={keys} spellCheck={false} />
+          <input className="field" aria-label="Escribir" value={to} onChange={(e) => setTo(e.target.value)} onKeyDown={keys} spellCheck={false} />
         )}
         <div className="rule-edit-actions">
           <button className="btn btn-sm" onClick={cancel}>
@@ -234,7 +265,7 @@ function RuleRow({
           <TrashIcon />
         </button>
       </div>
-      <Switch label={r.enabled ? "Desactivar" : "Activar"} checked={r.enabled} onChange={(enabled) => onSave({ ...r, enabled })} />
+      <Switch label={`Regla activada: ${r.from}`} checked={r.enabled} onChange={(enabled) => onSave({ ...r, enabled })} />
     </div>
   );
 }

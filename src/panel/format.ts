@@ -7,6 +7,10 @@ const langNames = new Intl.DisplayNames(["es"], { type: "language" });
 
 const finite = (n: number) => (Number.isFinite(n) ? n : 0);
 
+const axisFmt = new Intl.NumberFormat("es", { maximumFractionDigits: 1 });
+/** Axis tick label: keeps one decimal so 0.5 doesn't round up to 1. */
+export const fmtAxis = (n: number) => axisFmt.format(finite(n));
+
 export const fmtNum = (n: number) => nf.format(Math.round(finite(n)) || 0);
 
 export function fmtDuration(ms: number): string {

@@ -9,8 +9,8 @@ export default defineConfig({
     target: "safari15",
     rollupOptions: {
       input: {
-        index: decodeURIComponent(new URL("./index.html", import.meta.url).pathname),
-        mascot: decodeURIComponent(new URL("./mascot.html", import.meta.url).pathname),
+        index: "index.html",
+        mascot: "mascot.html",
       },
     },
   },

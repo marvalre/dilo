@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, events, type Stats, type StorageInfo } from "./api";
 import { useModelStatus, useTauriEvent, useUpdate } from "./hooks";
-import { errMsg, fmtBytes, fmtDayMonth, fmtMinutes, fmtNum, greeting, langName, parseDay, todayKey } from "./format";
+import { errMsg, fmtAxis, fmtBytes, fmtDayMonth, fmtMinutes, fmtNum, greeting, langName, parseDay, todayKey } from "./format";
 import { DownloadIcon, WarnIcon } from "./icons";
 import type { Section } from "./App";
 
@@ -9,9 +9,11 @@ export default function Home({ onNavigate }: { onNavigate: (s: Section) => void 
   const [stats, setStats] = useState<Stats | null>(null);
   const [storage, setStorage] = useState<StorageInfo | null>(null);
 
+  const seq = useRef(0);
   const refresh = useCallback(() => {
-    api.stats().then(setStats).catch(() => {});
-    api.storage().then(setStorage).catch(() => {});
+    const my = ++seq.current;
+    api.stats().then((s) => my === seq.current && setStats(s)).catch(() => {});
+    api.storage().then((s) => my === seq.current && setStorage(s)).catch(() => {});
   }, []);
   useEffect(refresh, [refresh]);
   useTauriEvent(events.onHistoryChanged, refresh);
@@ -208,8 +210,8 @@ function DailyChart({ days }: { days: [string, number][] }) {
     <div className="chart" onMouseLeave={() => setHover(null)}>
       <div className="chart-plot">
         <div className="chart-grid" aria-hidden>
-          <span data-v={fmtNum(max)} />
-          <span data-v={fmtNum(max / 2)} />
+          <span data-v={fmtAxis(max)} />
+          <span data-v={fmtAxis(max / 2)} />
           <span data-v="0" />
         </div>
         <div className="chart-bars">
@@ -218,7 +220,8 @@ function DailyChart({ days }: { days: [string, number][] }) {
               key={key}
               className={`chart-col${key === tk ? " today" : ""}${hover === i ? " hover" : ""}`}
               onMouseEnter={() => setHover(i)}
-              aria-label={`${label(key)}: ${n} palabras`}
+              role="img"
+              aria-label={`${label(key)}: ${fmtNum(n)} ${n === 1 ? "palabra" : "palabras"}`}
             >
               <div className="chart-bar" style={{ height: n > 0 ? `max(3px, ${(n / max) * 100}%)` : "2px" }} data-zero={n === 0} />
             </div>
