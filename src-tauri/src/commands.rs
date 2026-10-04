@@ -2,7 +2,8 @@
 
 use crate::coordinator::{Core, ModelStatus};
 use crate::rules::{Rule, RuleKind};
-use crate::{hotkey, models, settings::Settings, stats::Stats, store::Dictation};
+use crate::{hotkey, models, settings::Settings, stats::Stats, store::{self, Dictation}};
+use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use cpal::traits::{DeviceTrait, HostTrait};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -11,6 +12,19 @@ type Core_<'a> = State<'a, Arc<Core>>;
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+// A panic elsewhere while a lock was held must not turn every later command into a panic.
+fn read<T>(l: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    l.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn write<T>(l: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    l.write().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[tauri::command]
@@ -40,7 +54,7 @@ pub fn update_dictation(app: AppHandle, core: Core_, id: i64, text: String) -> R
 
 #[tauri::command]
 pub fn clear_history(app: AppHandle, core: Core_, older_than_days: Option<u32>) -> Result<usize, String> {
-    let before = older_than_days.map(|d| crate::coordinator::now_ms() - d as i64 * 86_400_000);
+    let before = older_than_days.map(|d| store::cutoff_ms(crate::coordinator::now_ms(), d));
     let n = core.store.clear(before).map_err(err)?;
     let _ = app.emit("history://changed", ());
     Ok(n)
@@ -55,38 +69,23 @@ pub struct StorageInfo {
     dictations: u64,
 }
 
-fn dir_size(path: &std::path::Path) -> u64 {
-    std::fs::read_dir(path)
-        .map(|entries| {
-            entries
-                .flatten()
-                .map(|e| match e.metadata() {
-                    Ok(m) if m.is_dir() => dir_size(&e.path()),
-                    Ok(m) => m.len(),
-                    Err(_) => 0,
-                })
-                .sum()
-        })
-        .unwrap_or(0)
-}
-
 #[tauri::command]
 pub fn storage_info(core: Core_) -> Result<StorageInfo, String> {
-    let model_bytes = dir_size(&core.data_dir.join("models"));
+    let model_bytes = store::dir_size(&core.data_dir.join("models"));
     let history_bytes = core.store.size_bytes().map_err(err)?;
-    let warn_mb = core.settings.read().unwrap().storage_warn_mb;
+    let warn_bytes = read(&core.settings).storage_warn_bytes();
     Ok(StorageInfo {
         model_bytes,
         history_bytes,
-        total_bytes: model_bytes + history_bytes,
-        warn_bytes: warn_mb * 1_000_000,
+        total_bytes: model_bytes.saturating_add(history_bytes),
+        warn_bytes,
         dictations: core.store.count().map_err(err)?,
     })
 }
 
 #[tauri::command]
 pub fn get_settings(core: Core_) -> Settings {
-    core.settings.read().unwrap().clone()
+    read(&core.settings).clone()
 }
 
 #[tauri::command]
@@ -98,7 +97,7 @@ pub fn save_settings(app: AppHandle, core: Core_, settings: Settings) -> Result<
 /// The one place settings change: holds the lock for the whole update so the
 /// panel and the tray can't overwrite each other, then persists and notifies.
 pub fn update_settings(app: &AppHandle, core: &Core, change: impl FnOnce(&mut Settings)) -> Result<(), String> {
-    let mut guard = core.settings.write().unwrap();
+    let mut guard = write(&core.settings);
     let old = guard.clone();
     let mut next = old.clone();
     change(&mut next);
@@ -112,9 +111,17 @@ pub fn update_settings(app: &AppHandle, core: &Core, change: impl FnOnce(&mut Se
             next.launch_at_login = old.launch_at_login;
         }
     }
-    next.save(&core.data_dir).map_err(err)?;
+    if let Err(e) = next.save(&core.data_dir) {
+        // Keep the OS login item in sync with what is actually stored.
+        if next.launch_at_login != old.launch_at_login {
+            use tauri_plugin_autostart::ManagerExt;
+            let al = app.autolaunch();
+            let _ = if old.launch_at_login { al.enable() } else { al.disable() };
+        }
+        return Err(err(e));
+    }
     if next.hotkey != old.hotkey {
-        if let Some(h) = core.hotkey.lock().unwrap().as_ref() {
+        if let Some(h) = lock(&core.hotkey).as_ref() {
             h.set(&next.hotkey);
         }
     }
@@ -165,9 +172,7 @@ pub struct NewRule {
 
 #[tauri::command]
 pub fn save_rule(core: Core_, rule: NewRule) -> Result<Rule, String> {
-    if rule.from.trim().is_empty() {
-        return Err("Escribe la palabra o frase".into());
-    }
+    crate::rules::validate(&rule.from, &rule.to)?;
     core.store.save_rule(rule.id, rule.kind, &rule.from, &rule.to, rule.enabled).map_err(err)
 }
 
@@ -192,7 +197,7 @@ pub fn model_status(core: Core_) -> ModelStatus {
 #[tauri::command]
 pub fn download_model(app: AppHandle, core: Core_) -> Result<(), String> {
     {
-        let mut m = core.model.lock().unwrap();
+        let mut m = lock(&core.model);
         if m.downloading {
             return Ok(());
         }
@@ -202,16 +207,20 @@ pub fn download_model(app: AppHandle, core: Core_) -> Result<(), String> {
     let core = core.inner().clone();
     std::thread::spawn(move || {
         let dir = core.model_dir();
-        let result = models::download(&dir, |done, total| {
-            {
-                let mut m = core.model.lock().unwrap();
-                m.done = done;
-                m.total = total;
-            }
-            let _ = app.emit("model://status", core.model_status());
-        });
+        // A panic inside the download must not leave `downloading` stuck on true forever.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            models::download(&dir, |done, total| {
+                {
+                    let mut m = lock(&core.model);
+                    m.done = done;
+                    m.total = total;
+                }
+                let _ = app.emit("model://status", core.model_status());
+            })
+        }))
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("la descarga falló de forma inesperada")));
         {
-            let mut m = core.model.lock().unwrap();
+            let mut m = lock(&core.model);
             m.downloading = false;
             m.error = result.err().map(|e| format!("{e:#}"));
         }
